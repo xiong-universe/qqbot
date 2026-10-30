@@ -33,12 +33,13 @@ interface PersonaWire {
 }
 
 /** GET 回显的生效配置（appSecret 已剔除） */
-type ReplySplitMode = 'none' | 'line' | 'paragraph';
+type ReplySplitMode = 'none' | 'delimiter' | 'line' | 'paragraph';
 
 type ConfigWire = {
   requireMention?: boolean;
   streaming?: boolean;
   replySplitMode?: ReplySplitMode;
+  replySplitDelimiter?: string;
   replySplitIntervalMs?: number;
   showToolResults?: boolean;
   debug?: boolean;
@@ -310,6 +311,7 @@ const MODE_OPTIONS: ReadonlyArray<{ value: AccessMode; label: string }> = [
 
 const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
   { value: 'none', label: '按长度' },
+  { value: 'delimiter', label: '约定分隔符' },
   { value: 'line', label: '每个换行' },
   { value: 'paragraph', label: '按空行' },
 ];
@@ -387,6 +389,9 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }
     if (changed.defaultPersona !== undefined) {
       changed.defaultPersona = String(changed.defaultPersona).trim();
+    }
+    if (changed.replySplitDelimiter !== undefined) {
+      changed.replySplitDelimiter = String(changed.replySplitDelimiter).trim();
     }
 
     setBusy(true);
@@ -490,9 +495,17 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }),
     createElement(SegmentedRow, {
       label: '回复拆分', value: form.replySplitMode ?? 'none', options: SPLIT_OPTIONS,
-      help: '每个换行拆成一条独立消息；空行模式按段落拆分。开启后自动关闭流式输出',
+      help: '推荐「约定分隔符」：模型输出 ||| 时才拆条，正文换行不会拆；开启后自动关闭流式输出',
       onChange: (v) => { patch('replySplitMode', v as ReplySplitMode); },
     }),
+    form.replySplitMode === 'delimiter'
+      ? createElement(FieldRow, {
+          label: '分隔符', value: form.replySplitDelimiter ?? '|||',
+          placeholder: '|||',
+          help: '模型输出该字符串时拆成多条消息（代码块内不拆）；需同步写进人格提示词',
+          onChange: (v) => { patch('replySplitDelimiter', v); },
+        })
+      : null,
     form.replySplitMode !== undefined && form.replySplitMode !== 'none'
       ? createElement(FieldRow, {
           label: '拆分间隔(ms)', value: String(form.replySplitIntervalMs ?? 0),

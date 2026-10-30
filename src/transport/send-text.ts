@@ -11,8 +11,10 @@ import { splitReplyText, type ReplySplitMode } from './splitter.ts';
 export interface SendTextOptions {
   /** 单条消息字符上限 */
   limit: number;
-  /** 换行拆分方式 */
+  /** 多消息拆分方式 */
   splitMode?: ReplySplitMode;
+  /** delimiter 模式使用的分隔符（默认 |||） */
+  splitDelimiter?: string;
   /** 拆分后相邻消息之间的间隔(ms)，0=不等候 */
   intervalMs?: number;
 }
@@ -35,7 +37,7 @@ export async function sendTextParts(
 ): Promise<void> {
   const splitMode = options.splitMode ?? 'none';
   const intervalMs = Math.max(0, options.intervalMs ?? 0);
-  const parts = splitReplyText(text, splitMode);
+  const parts = splitReplyText(text, splitMode, options.splitDelimiter);
   let sent = 0;
 
   for (const part of parts) {

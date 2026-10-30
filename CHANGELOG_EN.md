@@ -6,6 +6,22 @@ This file records significant dsh-qqbot updates from a product perspective, focu
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.7.0] - 2026-10-30
+
+### ✨ Added
+
+- **Delimiter-based message splitting**: new `replySplitMode: delimiter` and `replySplitDelimiter` (default `|||`). Replies split into multiple messages only at the delimiter; ordinary newlines stay in one message. Delimiters inside fenced code blocks are ignored. Configurable from the settings panel.
+- **Persona presets and switching**: new `personas` / `defaultPersona` config plus a "Persona presets" section in the settings panel. A new `/persona` (alias `/人格`) menu in QQ switches personas with one tap; `/persona default` follows the default, `/persona off` disables it for the current chat. Personas are isolated per group/private chat and apply to the next message.
+- **Bundled personas**: whale girl, gentle JK girl, cool senior, cat girl, and a general assistant templates are provided in the sample config.
+
+### Fixed
+
+- **Config saving failed with source-direct loading**: in `--patch` source-direct setups the profile directory could not be located; it is now resolved via `--profile` + `DSH_HOME` fallback.
+
+### Compatibility
+
+- Legacy `replySplitMode: line` / `paragraph` still works; the default remains `none` so streaming is preserved unless splitting is enabled.
+
 ## [0.6.0] - 2026-10-30
 
 ### ✨ Added

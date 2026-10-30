@@ -89,7 +89,7 @@ export interface BindRoutesOptions {
 
 /** 可经 UI 编辑的配置键（白名单：只收用户必要的字段，其余走 patch/env） */
 const EDITABLE_CONFIG_KEYS = new Set([
-  'requireMention', 'streaming', 'replySplitMode', 'replySplitIntervalMs',
+  'requireMention', 'streaming', 'replySplitMode', 'replySplitDelimiter', 'replySplitIntervalMs',
   'showToolResults', 'debug',
   'provider', 'model', 'preset',
   'groupPrompt', 'directPrompt',
@@ -102,6 +102,7 @@ const EDITABLE_CONFIG_SCHEMAS: Record<string, (value: unknown) => unknown> = {
   requireMention: (v) => booleanSchema(v, 'requireMention'),
   streaming: (v) => booleanSchema(v, 'streaming'),
   replySplitMode: (v) => splitModeSchema(v),
+  replySplitDelimiter: (v) => delimiterSchema(v),
   replySplitIntervalMs: (v) => intervalSchema(v),
   showToolResults: (v) => booleanSchema(v, 'showToolResults'),
   debug: (v) => booleanSchema(v, 'debug'),
@@ -129,13 +130,23 @@ function stringSchema(name: string): (value: unknown) => unknown {
 }
 
 /** 回复拆分方式（与 config.ts 的 ReplySplitMode 对齐） */
-const SPLIT_MODES = ['none', 'line', 'paragraph'] as const;
+const SPLIT_MODES = ['none', 'delimiter', 'line', 'paragraph'] as const;
 
 function splitModeSchema(value: unknown): string {
   if (typeof value !== 'string' || !(SPLIT_MODES as readonly string[]).includes(value)) {
     throw new TypeError(`replySplitMode 必须是 ${SPLIT_MODES.join(' / ')} 之一`);
   }
   return value;
+}
+
+/** 约定分隔符：1–16 字符、不含空白/换行（避免误拆正文） */
+function delimiterSchema(value: unknown): string {
+  if (typeof value !== 'string') throw new TypeError('replySplitDelimiter 必须是字符串');
+  const delimiter = value.trim();
+  if (delimiter.length === 0) throw new TypeError('replySplitDelimiter 不能为空');
+  if (delimiter.length > 16) throw new TypeError('replySplitDelimiter 过长（≤16）');
+  if (/\s/.test(delimiter)) throw new TypeError('replySplitDelimiter 不能包含空白字符');
+  return delimiter;
 }
 
 /** 拆分间隔（毫秒，0–10000 非负整数；过大只会拖慢发送） */

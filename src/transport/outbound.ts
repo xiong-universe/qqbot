@@ -173,6 +173,7 @@ class OutboundRouter {
         this.shouldStream(record),
         this.config.replySplitMode ?? 'none',
         this.config.replySplitIntervalMs ?? 0,
+        this.config.replySplitDelimiter,
       );
       this.buffers.set(sessionId, buffer);
     }
@@ -181,7 +182,7 @@ class OutboundRouter {
 
   /**
    * 是否启用流式：配置开启 + c2c + 有 msgId（群聊不支持流式）。
-   * 开启换行拆分时关闭流式：QQ 流式只能在一条消息内全量替换，
+   * 开启多消息拆分时关闭流式：QQ 流式只能在一条消息内全量替换，
    * 无法拆成多条独立消息。
    */
   private shouldStream(record: SessionRecord): boolean {
@@ -302,6 +303,7 @@ class OutboundRouter {
       {
         limit: this.config.textChunkLimit,
         splitMode: this.config.replySplitMode ?? 'none',
+        splitDelimiter: this.config.replySplitDelimiter,
         intervalMs: this.config.replySplitIntervalMs ?? 0,
       },
       this.logger,

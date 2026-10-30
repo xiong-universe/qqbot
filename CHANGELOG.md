@@ -6,6 +6,22 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [0.7.0] - 2026-10-30
+
+### ✨ 新功能
+
+- **约定分隔符拆分消息**：新增 `replySplitMode: delimiter` 与 `replySplitDelimiter`（默认 `|||`）。模型只在分隔符处拆成多条消息，正文换行不再触发连发；代码块内的分隔符不拆。设置面板可切换并自定义分隔符。
+- **人格预设与切换**：新增 `personas` / `defaultPersona` 配置与设置面板「人格预设」区块，可把单一 prompt 拆成多套人格；QQ 端新增 `/persona`（别名 `/人格`）菜单，点击即可切换，`/persona default` 跟随默认、`/persona off` 关闭本会话人格。人格按群/私聊会话隔离，切换后下一条消息即生效。
+- **预设人格**：随仓库配置提供鲸鱼少女、温柔 JK 妹妹、清冷学姐、猫系小泠、通用助手等人格模板。
+
+### 问题修复
+
+- **源码直载时保存配置失败**：`--patch` 源码直载场景下无法定位 profile 目录，现已按 `--profile` + `DSH_HOME` 兜底定位。
+
+### 兼容
+
+- 旧的 `replySplitMode: line` / `paragraph` 仍可使用；`replySplitMode` 默认仍为 `none`（不开启拆分时保留流式输出）。
+
 ## [0.6.0] - 2026-10-30
 
 ### ✨ 新功能

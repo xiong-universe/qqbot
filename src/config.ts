@@ -89,8 +89,10 @@ export interface ImQQBotConfig {
   textChunkLimit: number;
   /** 是否启用流式输出（群聊始终不启用） */
   streaming: boolean;
-  /** 回复拆分方式：none=仅按长度切分；line=每个换行一条；paragraph=按空行分段 */
-  replySplitMode: 'none' | 'line' | 'paragraph';
+  /** 回复拆分方式：none=仅按长度切分；delimiter=按约定分隔符；line=每个换行一条；paragraph=按空行分段 */
+  replySplitMode: 'none' | 'delimiter' | 'line' | 'paragraph';
+  /** delimiter 模式的分隔符（模型输出中出现它才拆条），默认 ||| */
+  replySplitDelimiter: string;
   /** 拆分后每条消息之间的间隔(ms)，0=不等候（顺序发送，避免平台限流时可用） */
   replySplitIntervalMs: number;
   /** 每会话最大闲置时长(ms)，超时自动回收 */
@@ -148,8 +150,10 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
     .description('默认人格 id，留空表示不启用人格'),
   textChunkLimit: Schema.number().default(4500).description('单条消息最大字符数'),
   streaming: Schema.boolean().default(true).description('是否启用流式输出（群聊始终不启用）'),
-  replySplitMode: Schema.union(['none', 'line', 'paragraph']).default('none')
-    .description('回复拆分方式：none=按长度，line=每个换行一条，paragraph=按空行分段'),
+  replySplitMode: Schema.union(['none', 'delimiter', 'line', 'paragraph']).default('none')
+    .description('回复拆分方式：none=按长度，delimiter=按约定分隔符（推荐），line=每个换行一条，paragraph=按空行分段'),
+  replySplitDelimiter: Schema.string().default('|||')
+    .description('delimiter 模式的分隔符：模型输出中出现它才拆条（默认 |||）'),
   replySplitIntervalMs: Schema.number().default(0)
     .description('拆分后每条消息之间的间隔(ms)，0=不等候'),
   sessionIdleTimeout: Schema.number().default(30 * 60 * 1000).description('会话闲置超时(ms)'),

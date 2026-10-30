@@ -58,3 +58,30 @@ describe('splitReplyText: paragraph', () => {
     ]);
   });
 });
+
+describe('splitReplyText: delimiter', () => {
+  it('只在约定分隔符处拆分，正文换行保留在同一条', () => {
+    expect(splitReplyText('第一句\n第二句|||第三句', 'delimiter'))
+      .toEqual(['第一句\n第二句', '第三句']);
+  });
+
+  it('没有分隔符时原样一条（哪怕有很多换行）', () => {
+    expect(splitReplyText('a\nb\nc', 'delimiter')).toEqual(['a\nb\nc']);
+  });
+
+  it('代码块内的分隔符不拆', () => {
+    const text = '看这段|||```js\nconst a = 1 ||| 2;\n```\n结束';
+    expect(splitReplyText(text, 'delimiter')).toEqual([
+      '看这段',
+      '```js\nconst a = 1 ||| 2;\n```\n结束',
+    ]);
+  });
+
+  it('支持自定义分隔符，丢弃首尾空段并裁剪空白', () => {
+    expect(splitReplyText('  a  %%  b %%  ', 'delimiter', '%%')).toEqual(['a', 'b']);
+  });
+
+  it('CRLF 归一化后再拆', () => {
+    expect(splitReplyText('a\r\nb|||c', 'delimiter')).toEqual(['a\nb', 'c']);
+  });
+});

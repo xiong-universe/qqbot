@@ -397,6 +397,34 @@ describe('bind-routes', () => {
     expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('重复') });
   });
 
+  it('POST config：约定分隔符与拆分模式通过校验并规范化', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"replySplitMode":"delimiter","replySplitDelimiter":"  %%%  "}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toEqual({ replySplitMode: 'delimiter', replySplitDelimiter: '%%%' });
+  });
+
+  it('POST config：空分隔符被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, '{"replySplitMode":"delimiter","replySplitDelimiter":"   "}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('replySplitDelimiter') });
+  });
+
   it('POST config：凭据字段被拒绝并引导绑定功能', async () => {
     const { routes } = createHarness();
     const res = fakeRes();

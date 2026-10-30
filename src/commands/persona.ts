@@ -54,6 +54,7 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
           '手动指定: `/persona <id>`',
           '跟随默认: `/persona default`　关闭人格: `/persona off`',
           '',
+          '> 人格按会话隔离：群里切换只影响本群，私聊切换只影响你和机器人的对话。',
           '> 切换后下一条消息立即生效，无需新建会话。',
         );
 
@@ -66,8 +67,8 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
         manager.clearPersonaOverride(scope, peerId);
         const current = manager.getEffectivePersona(scope, peerId);
         return current
-          ? `✅ 已恢复默认人格: ${current.name} (${current.id})\n下一条消息生效。`
-          : '✅ 已恢复默认（当前未配置默认人格，人格已关闭）\n下一条消息生效。';
+          ? `✅ 本会话已恢复默认人格: ${current.name} (${current.id})\n下一条消息生效。`
+          : '✅ 本会话已恢复默认（当前未配置默认人格，人格已关闭）\n下一条消息生效。';
       }
 
       // off：仅关闭当前会话的人格
@@ -84,7 +85,7 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
       }
 
       manager.setPersonaOverride(scope, peerId, persona.id);
-      return `✅ 人格已切换: ${persona.name} (${persona.id})\n下一条消息生效。`;
+      return `✅ 人格已切换（仅本会话/本群）: ${persona.name} (${persona.id})\n下一条消息生效。`;
     },
   };
 }
