@@ -75,6 +75,10 @@ export interface ImQQBotConfig {
   textChunkLimit: number;
   /** 是否启用流式输出（群聊始终不启用） */
   streaming: boolean;
+  /** 回复拆分方式：none=仅按长度切分；line=每个换行一条；paragraph=按空行分段 */
+  replySplitMode: 'none' | 'line' | 'paragraph';
+  /** 拆分后每条消息之间的间隔(ms)，0=不等候（顺序发送，避免平台限流时可用） */
+  replySplitIntervalMs: number;
   /** 每会话最大闲置时长(ms)，超时自动回收 */
   sessionIdleTimeout: number;
   /** 并发队列最大长度 */
@@ -119,6 +123,10 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
   directPrompt: Schema.string().description('私聊额外system prompt'),
   textChunkLimit: Schema.number().default(4500).description('单条消息最大字符数'),
   streaming: Schema.boolean().default(true).description('是否启用流式输出（群聊始终不启用）'),
+  replySplitMode: Schema.union(['none', 'line', 'paragraph']).default('none')
+    .description('回复拆分方式：none=按长度，line=每个换行一条，paragraph=按空行分段'),
+  replySplitIntervalMs: Schema.number().default(0)
+    .description('拆分后每条消息之间的间隔(ms)，0=不等候'),
   sessionIdleTimeout: Schema.number().default(30 * 60 * 1000).description('会话闲置超时(ms)'),
   maxQueue: Schema.number().default(20).description('并发队列最大长度'),
   processingTimeoutMs: Schema.number().default(30 * 60 * 1000).description('处理超时(ms)，超时中断当前 LLM 调用'),

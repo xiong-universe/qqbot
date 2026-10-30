@@ -7,8 +7,8 @@
 import type { SessionManager, SessionRecord } from '../session/index.ts';
 import type { ImQQBotConfig } from '../config.ts';
 import type { Logger } from '../types.ts';
-import { chunkMarkdownText } from './chunker.ts';
 import { OutboundBuffer, type QQBotSender } from './outbound-buffer.ts';
+import { sendTextParts } from './send-text.ts';
 import { formatToolResult, type ToolsRegistryLike, type ToolResultData } from './tool-presenter.ts';
 import type { DeliverablesDelivererLike } from './deliverables.ts';
 import {
@@ -165,15 +165,28 @@ class OutboundRouter {
   private appendChunk(sessionId: string, record: SessionRecord, text: string): void {
     let buffer = this.buffers.get(sessionId);
     if (buffer === undefined) {
-      buffer = new OutboundBuffer(record, this.bot, this.config.textChunkLimit, this.logger, this.shouldStream(record));
+      buffer = new OutboundBuffer(
+        record,
+        this.bot,
+        this.config.textChunkLimit,
+        this.logger,
+        this.shouldStream(record),
+        this.config.replySplitMode ?? 'none',
+        this.config.replySplitIntervalMs ?? 0,
+      );
       this.buffers.set(sessionId, buffer);
     }
     buffer.append(text);
   }
 
-  /** 是否启用流式：配置开启 + c2c + 有 msgId（群聊不支持流式） */
+  /**
+   * 是否启用流式：配置开启 + c2c + 有 msgId（群聊不支持流式）。
+   * 开启换行拆分时关闭流式：QQ 流式只能在一条消息内全量替换，
+   * 无法拆成多条独立消息。
+   */
   private shouldStream(record: SessionRecord): boolean {
-    return this.config.streaming
+    return (this.config.replySplitMode ?? 'none') === 'none'
+      && this.config.streaming
       && record.replyTarget.scope === 'c2c'
       && !!record.replyTarget.msgId;
   }
@@ -280,16 +293,20 @@ class OutboundRouter {
     })();
   }
 
-  /** 统一发送：切分 + 逐 chunk 发送 + 错误记录 */
+  /** 统一发送：换行拆分 + 长度切分 + 顺序发送 + 错误记录 */
   private async send(record: SessionRecord, text: string, tag: string): Promise<void> {
-    const chunks = chunkMarkdownText(text, this.config.textChunkLimit);
-    for (const chunk of chunks) {
-      try {
-        await this.bot.sendMarkdown(record.replyTarget, chunk);
-      } catch (err) {
-        this.logger.error(`im-qqbot: ${tag} failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
+    await sendTextParts(
+      this.bot,
+      record.replyTarget,
+      text,
+      {
+        limit: this.config.textChunkLimit,
+        splitMode: this.config.replySplitMode ?? 'none',
+        intervalMs: this.config.replySplitIntervalMs ?? 0,
+      },
+      this.logger,
+      tag,
+    );
   }
 }
 

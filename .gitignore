@@ -5,6 +5,8 @@ docs/
 .dsh-sessions/
 *.tsbuildinfo
 cordis.dev.yml
+cordis.dev.local.yml
+*.tgz
 
 # lib/ 构建产物入库（GitHub 安装开箱即用），但排除类型与 sourcemap
 lib/**/*.d.ts

@@ -184,4 +184,26 @@ describe('getProfileDir', () => {
 
     expect(getProfileDir(source)).toBeNull();
   });
+
+  it('源码直载 + --profile：按 DSH_HOME/profiles/<name> 命中（界面保存可用）', () => {
+    const root = tempDir();
+    const source = join(root, 'workspace', 'dsh-qqbot', 'src');
+    mkdirSync(source, { recursive: true });
+    const profile = join(root, 'home', 'profiles', 'qqbot-dev');
+    mkdirSync(profile, { recursive: true });
+    writeFileSync(join(profile, 'package.json'), '{}\n');
+
+    const argv = process.argv;
+    process.env.DSH_HOME = join(root, 'home');
+    try {
+      process.argv = ['node', '/path/to/dsh', '--profile', 'qqbot-dev'];
+      expect(getProfileDir(source)).toBe(profile);
+      // 同名目录没有 package.json → 不是真实 profile，不命中
+      rmSync(join(profile, 'package.json'), { force: true });
+      expect(getProfileDir(source)).toBeNull();
+    } finally {
+      process.argv = argv;
+      delete process.env.DSH_HOME;
+    }
+  });
 });

@@ -71,6 +71,16 @@ export function getProfileDir(baseDir: string = PLUGIN_ROOT): string | null {
     dir = parent;
   }
 
+  // 源码直载（checkout 不在任何 profile 的 node_modules 下）：按进程的
+  // profile 判据 + DSH_HOME 直连 profile 目录，让界面保存配置可用。
+  // 仅接受带 package.json 的真实 profile，避免命中任意同名目录。
+  const current = currentProfileName();
+  if (current !== undefined) {
+    const home = process.env.DSH_HOME ?? resolve(os.homedir(), '.dsh');
+    const candidate = resolve(home, 'profiles', current);
+    if (existsSync(resolve(candidate, 'package.json'))) return candidate;
+  }
+
   // link: 安装（symlink）下插件真实路径在 node_modules 之外，正向反推必失败；
   // 反查 profiles/*/node_modules 里指向本插件根的 symlink（#78）
   return findProfileBySymlink(baseDir);

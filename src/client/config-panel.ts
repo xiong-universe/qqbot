@@ -26,9 +26,13 @@ interface AccessControlWire {
 }
 
 /** GET 回显的生效配置（appSecret 已剔除） */
+type ReplySplitMode = 'none' | 'line' | 'paragraph';
+
 type ConfigWire = {
   requireMention?: boolean;
   streaming?: boolean;
+  replySplitMode?: ReplySplitMode;
+  replySplitIntervalMs?: number;
   showToolResults?: boolean;
   debug?: boolean;
   provider?: string;
@@ -161,8 +165,8 @@ function Switch({ checked, label, onChange }: {
 
 /** 访问模式分段选择（官方 SegmentedControl 结构：CSS 变量定位滑动指示器） */
 function Segmented({ value, options, onChange, label }: {
-  value: AccessMode; options: ReadonlyArray<{ value: AccessMode; label: string }>;
-  onChange: (next: AccessMode) => void; label: string;
+  value: string; options: ReadonlyArray<{ value: string; label: string }>;
+  onChange: (next: string) => void; label: string;
 }): ReactNode {
   const index = Math.max(0, options.findIndex((o) => o.value === value));
   const trackStyle = {
@@ -221,8 +225,8 @@ function AreaRow({ label, help, value, rows, onChange }: {
 
 /** 访问模式分段选择行 */
 function SegmentedRow({ label, help, value, options, onChange }: {
-  label: string; help?: string; value: AccessMode;
-  options: ReadonlyArray<{ value: AccessMode; label: string }>; onChange: (next: AccessMode) => void;
+  label: string; help?: string; value: string;
+  options: ReadonlyArray<{ value: string; label: string }>; onChange: (next: string) => void;
 }): ReactNode {
   return createElement('div', { className: 'imqb2-field' },
     createElement('div', { className: 'imqb2-head' },
@@ -239,6 +243,12 @@ const MODE_OPTIONS: ReadonlyArray<{ value: AccessMode; label: string }> = [
   { value: 'open', label: '所有人' },
   { value: 'allowlist', label: '白名单' },
   { value: 'disabled', label: '禁用' },
+];
+
+const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
+  { value: 'none', label: '按长度' },
+  { value: 'line', label: '每个换行' },
+  { value: 'paragraph', label: '按空行' },
 ];
 
 /** 深比较（表单值与初始回显值的 dirty 判断） */
@@ -340,7 +350,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     createElement('div', { className: 'imqb2-group-title' }, '服务范围'),
     createElement(SegmentedRow, {
       label: '私聊', value: access.c2cMode, options: MODE_OPTIONS,
-      onChange: (v) => { patch('access', { ...access, c2cMode: v }); },
+      onChange: (v) => { patch('access', { ...access, c2cMode: v as AccessMode }); },
     }),
     access.c2cMode === 'allowlist'
       ? createElement(AreaRow, {
@@ -351,7 +361,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       : null,
     createElement(SegmentedRow, {
       label: '群聊', value: access.groupMode, options: MODE_OPTIONS,
-      onChange: (v) => { patch('access', { ...access, groupMode: v }); },
+      onChange: (v) => { patch('access', { ...access, groupMode: v as AccessMode }); },
     }),
     access.groupMode === 'allowlist'
       ? createElement(AreaRow, {
@@ -369,9 +379,25 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }),
     createElement(SwitchRow, {
       label: '流式输出', checked: form.streaming ?? true,
-      help: '回复内容分段实时推送到聊天',
+      help: '回复内容分段实时推送到聊天（开启换行拆分时自动失效）',
       onChange: (v) => { patch('streaming', v); },
     }),
+    createElement(SegmentedRow, {
+      label: '回复拆分', value: form.replySplitMode ?? 'none', options: SPLIT_OPTIONS,
+      help: '每个换行拆成一条独立消息；空行模式按段落拆分。开启后自动关闭流式输出',
+      onChange: (v) => { patch('replySplitMode', v as ReplySplitMode); },
+    }),
+    form.replySplitMode !== undefined && form.replySplitMode !== 'none'
+      ? createElement(FieldRow, {
+          label: '拆分间隔(ms)', value: String(form.replySplitIntervalMs ?? 0),
+          placeholder: '0',
+          help: '相邻消息之间的等待时间，0 表示顺序立即发送；遇到平台限流可调大',
+          onChange: (v) => {
+            const n = Math.max(0, Math.round(Number(v)));
+            patch('replySplitIntervalMs', Number.isFinite(n) ? n : 0);
+          },
+        })
+      : null,
     createElement(SwitchRow, {
       label: '显示工具调用结果', checked: form.showToolResults ?? false,
       help: '在聊天中展示 agent 工具调用的结构化结果',

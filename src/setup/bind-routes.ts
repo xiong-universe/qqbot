@@ -89,7 +89,8 @@ export interface BindRoutesOptions {
 
 /** 可经 UI 编辑的配置键（白名单：只收用户必要的字段，其余走 patch/env） */
 const EDITABLE_CONFIG_KEYS = new Set([
-  'requireMention', 'streaming', 'showToolResults', 'debug',
+  'requireMention', 'streaming', 'replySplitMode', 'replySplitIntervalMs',
+  'showToolResults', 'debug',
   'provider', 'model', 'preset',
   'groupPrompt', 'directPrompt',
   'access',
@@ -99,6 +100,8 @@ const EDITABLE_CONFIG_KEYS = new Set([
 const EDITABLE_CONFIG_SCHEMAS: Record<string, (value: unknown) => unknown> = {
   requireMention: (v) => booleanSchema(v, 'requireMention'),
   streaming: (v) => booleanSchema(v, 'streaming'),
+  replySplitMode: (v) => splitModeSchema(v),
+  replySplitIntervalMs: (v) => intervalSchema(v),
   showToolResults: (v) => booleanSchema(v, 'showToolResults'),
   debug: (v) => booleanSchema(v, 'debug'),
   provider: stringSchema('provider'),
@@ -120,6 +123,27 @@ function stringSchema(name: string): (value: unknown) => unknown {
     if (value.length > 20000) throw new TypeError(`${name} 过长`);
     return value;
   };
+}
+
+/** 回复拆分方式（与 config.ts 的 ReplySplitMode 对齐） */
+const SPLIT_MODES = ['none', 'line', 'paragraph'] as const;
+
+function splitModeSchema(value: unknown): string {
+  if (typeof value !== 'string' || !(SPLIT_MODES as readonly string[]).includes(value)) {
+    throw new TypeError(`replySplitMode 必须是 ${SPLIT_MODES.join(' / ')} 之一`);
+  }
+  return value;
+}
+
+/** 拆分间隔（毫秒，0–10000 非负整数；过大只会拖慢发送） */
+function intervalSchema(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError('replySplitIntervalMs 必须是数字');
+  }
+  if (value < 0 || value > 10000) {
+    throw new TypeError('replySplitIntervalMs 必须在 0–10000 之间');
+  }
+  return Math.round(value);
 }
 
 /** manual 请求体大小上限（appId + appSecret 远小于此值） */

@@ -189,6 +189,61 @@ describe('OutboundRouter.routeStreamFrame', () => {
   });
 });
 
+describe('OutboundRouter: 回复拆分', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('line 模式：多行回复拆成多条消息，且不启用流式', async () => {
+    const { outbound, bot } = setup({ config: createConfig({ replySplitMode: 'line' }) });
+
+    outbound.routeStreamFrame('sess-qq', start('a1'));
+    outbound.routeStreamFrame('sess-qq', delta('a1', '第一行\n第二行'));
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(bot.openStream).not.toHaveBeenCalled();
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: '第一行\n第二行' }] } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(bot.openStream).not.toHaveBeenCalled();
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(1, c2cTarget, '第一行');
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(2, c2cTarget, '第二行');
+  });
+
+  it('paragraph 模式：按空行分段发送', async () => {
+    const { outbound, bot } = setup({ config: createConfig({ replySplitMode: 'paragraph' }) });
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: '段落一\n子行\n\n段落二' }] } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(2);
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(1, c2cTarget, '段落一\n子行');
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(2, c2cTarget, '段落二');
+  });
+
+  it('拆分间隔：相邻消息之间等待配置的时长', async () => {
+    const { outbound, bot } = setup({
+      config: createConfig({ replySplitMode: 'line', replySplitIntervalMs: 1000 }),
+    });
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: 'a\nb' }] } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('OutboundRouter: deliverables/presented', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });

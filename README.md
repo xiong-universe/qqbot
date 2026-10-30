@@ -104,6 +104,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `directPrompt` | string | - | 私聊额外 system prompt |
 | `textChunkLimit` | number | `4500` | 单条消息最大字符数 |
 | `streaming` | boolean | `true` | 是否启用流式输出（群聊始终不启用） |
+| `replySplitMode` | `none`/`line`/`paragraph` | `none` | 回复拆分方式：`none` 只按长度切分，`line` 每个换行发一条，`paragraph` 按空行分段。开启后自动关闭流式输出 |
+| `replySplitIntervalMs` | number | `0` | 拆分后相邻消息的间隔(ms)，`0` 表示立即顺序发送；遇到平台限流可调大 |
 | `sessionIdleTimeout` | number | `1800000` | 会话闲置超时(ms)，默认 30 分钟 |
 | `processingTimeoutMs` | number | `1800000` | 处理超时(ms)，超时中断当前 LLM 调用 |
 | `maxQueue` | number | `20` | 并发队列最大长度 |
@@ -111,6 +113,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `askTimeoutMs` | number | `300000` | 待答问题超时(ms)，默认 5 分钟（ask_user_question） |
 | `showToolResults` | boolean | `false` | 是否展示工具调用成功结果（错误始终展示） |
 | `debug` | boolean | `false` | 调试模式 |
+
+> 拆分说明：代码块与 Markdown 表格不会被拆散（整体一条）；同一 `msg_id` 最多支持 4 次被动回复，超出部分自动降级为主动推送。
 
 ### 访问控制（access）
 
