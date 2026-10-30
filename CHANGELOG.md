@@ -6,6 +6,17 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [0.6.0] - 2026-10-30
+
+### ✨ 新功能
+
+- **人格预设与切换**：新增 `personas` / `defaultPersona` 配置与设置面板「人格预设」区块，可把单一 prompt 拆成多套人格；QQ 端新增 `/persona`（别名 `/人格`）菜单，点击即可切换，`/persona default` 跟随默认、`/persona off` 关闭本会话人格。切换后下一条消息即生效，无需新建会话。
+- **按换行拆分多条回复**：新增 `replySplitMode`（`none`/`line`/`paragraph`）与 `replySplitIntervalMs`，把一条长回复按换行/段落拆成多条独立 QQ 消息发送；代码块与 Markdown 表格不会被拆散，开启后自动关闭流式输出。
+
+### 问题修复
+
+- **源码直载时保存配置失败**：`--patch` 源码直载场景下无法定位 profile 目录，现已按 `--profile` + `DSH_HOME` 兜底定位。
+
 ## [0.5.4] - 2026-10-28
 
 ### ⚠️ 行为变更（安全默认）

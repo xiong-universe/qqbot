@@ -52,6 +52,16 @@ export interface SendFileConfig {
   maxFiles: number;
 }
 
+/** 人格预设条目（QQ 端可用 /persona 切换） */
+export interface PersonaPreset {
+  /** 稳定标识（命令用，字母/数字/-/_，唯一） */
+  id: string;
+  /** 展示名称 */
+  name: string;
+  /** 该人格的 system prompt */
+  prompt: string;
+}
+
 export interface ImQQBotConfig {
   /** QQ Bot AppID */
   appId: string;
@@ -71,6 +81,10 @@ export interface ImQQBotConfig {
   groupPrompt?: string;
   /** 私聊额外 system prompt */
   directPrompt?: string;
+  /** 人格预设列表（QQ 端 /persona 切换） */
+  personas: PersonaPreset[];
+  /** 默认人格 id；空字符串 = 不启用人格（沿用旧版 groupPrompt/directPrompt） */
+  defaultPersona: string;
   /** 单条消息最大长度（QQ 限制约 5000 字符） */
   textChunkLimit: number;
   /** 是否启用流式输出（群聊始终不启用） */
@@ -111,6 +125,13 @@ export const AccessControlSchema: Schema<AccessControlConfig> = Schema.object({
   groupAllow: Schema.array(Schema.string()).default([]).description('群聊白名单（群 OpenID）'),
 });
 
+/** 人格预设子 Schema（独立导出：config 路由的服务端校验复用） */
+export const PersonaPresetSchema: Schema<PersonaPreset> = Schema.object({
+  id: Schema.string().description('人格标识（字母/数字/-/_，唯一）'),
+  name: Schema.string().description('人格展示名称'),
+  prompt: Schema.string().description('该人格的 system prompt'),
+});
+
 export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
   appId: Schema.string().default('').description('QQ 机器人 AppID'),
   appSecret: Schema.string().default('').description('QQ 机器人 AppSecret'),
@@ -121,6 +142,10 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
   requireMention: Schema.boolean().default(true).description('群聊是否需要@bot触发'),
   groupPrompt: Schema.string().description('群聊额外system prompt'),
   directPrompt: Schema.string().description('私聊额外system prompt'),
+  personas: Schema.array(PersonaPresetSchema).default([])
+    .description('人格预设列表（QQ 端 /persona 切换）'),
+  defaultPersona: Schema.string().default('')
+    .description('默认人格 id，留空表示不启用人格'),
   textChunkLimit: Schema.number().default(4500).description('单条消息最大字符数'),
   streaming: Schema.boolean().default(true).description('是否启用流式输出（群聊始终不启用）'),
   replySplitMode: Schema.union(['none', 'line', 'paragraph']).default('none')

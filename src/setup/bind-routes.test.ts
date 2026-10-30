@@ -353,6 +353,50 @@ describe('bind-routes', () => {
     expect(json(res)).toEqual({ ok: true, message: '配置已保存，插件将自动重载（进行中的机器人会话将重置）' });
   });
 
+  it('POST config：人格预设通过校验并规范化空白 id/名称', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":" cat ","name":"","prompt":"你是猫娘。"}],"defaultPersona":" cat "}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toEqual({
+      personas: [{ id: 'cat', name: 'cat', prompt: '你是猫娘。' }],
+      defaultPersona: 'cat',
+    });
+  });
+
+  it('POST config：人格 id 非法字符被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, '{"personas":[{"id":"a b","name":"x","prompt":""}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('id') });
+  });
+
+  it('POST config：人格 id 重复被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"dup","name":"a","prompt":""},{"id":"dup","name":"b","prompt":""}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('重复') });
+  });
+
   it('POST config：凭据字段被拒绝并引导绑定功能', async () => {
     const { routes } = createHarness();
     const res = fakeRes();

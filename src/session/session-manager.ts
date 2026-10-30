@@ -20,8 +20,14 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { ChatScope, Logger, ReplyTarget } from '../types.ts';
-import type { ImQQBotConfig } from '../config.ts';
+import type { ImQQBotConfig, PersonaPreset } from '../config.ts';
 import { ModelResolver } from '../model/model-resolver.ts';
+import {
+  buildPersonaPromptSections,
+  findPersona,
+  PERSONA_OFF,
+  resolvePersonaId,
+} from '../personas/persona-utils.ts';
 import type { ModelRoute, ModelEntry } from '../model/types.ts';
 import { IdleEvictor } from './idle-evictor.ts';
 import type { QuestionChannel } from '../features/question-channel.ts';
@@ -137,11 +143,11 @@ export class SessionManager {
   }
 
   /**
-   * 通过 system-prompt/assemble waterfall 注入群聊/私聊额外 system prompt。
+   * 通过 system-prompt/assemble waterfall 注入人格与群聊/私聊额外 system prompt。
    *
-   * 该事件在每次 turn 构建 request 时触发；此处按会话 scope（群聊/私聊）
-   * 追加对应的额外 prompt section。会话尚未建立（首次 assemble）或未配置
-   * 额外 prompt 时原样返回，不做改动。
+   * 该事件在每次 turn 构建 request 时触发；此处按会话解析出生效人格
+   * （per-chat 覆盖 > config.defaultPersona），再叠加 scope 提示词 section。
+   * 会话尚未建立（首次 assemble）或两者都未配置时原样返回，不做改动。
    */
   private registerScopePromptInjection(): void {
     const assemble = async (
@@ -155,12 +161,18 @@ export class SessionManager {
       const record = this.findByAgent(context.agent);
       if (!record) return assembled;
 
-      const prompt = record.scope === 'group' ? this.config.groupPrompt : this.config.directPrompt;
-      if (!prompt) return assembled;
+      const persona = this.getEffectivePersona(record.scope, record.peerId);
+      const sections = buildPersonaPromptSections(
+        persona,
+        record.scope,
+        this.config.groupPrompt,
+        this.config.directPrompt,
+      );
+      if (sections.length === 0) return assembled;
 
       return {
         ...assembled,
-        sections: [...(assembled.sections ?? []), { name: 'qqbot:scope-prompt', order: 90, text: prompt }],
+        sections: [...(assembled.sections ?? []), ...sections],
       };
     };
 
@@ -291,6 +303,72 @@ export class SessionManager {
     this.modelResolver.clearPreset(key);
     this.logger.info(`preset pref cleared: key=${key} (next session applies)`);
     return { ok: true };
+  }
+
+  // ── 人格预设（/persona） ──
+
+  /** 列出配置中的人格预设 */
+  listPersonas(): PersonaPreset[] {
+    return [...(this.config.personas ?? [])];
+  }
+
+  /** 按 id 查找人格预设 */
+  findPersonaById(id: string): PersonaPreset | undefined {
+    return findPersona(this.config.personas, id);
+  }
+
+  /**
+   * 解析指定 peer 当前生效的人格 id。
+   *
+   * 优先级：per-chat 覆盖 > config.defaultPersona；两者都指向已删除的人格时返回 undefined。
+   */
+  getEffectivePersonaId(scope: ChatScope, peerId: string): string | undefined {
+    const key = this.sessionKey(scope, peerId);
+    return resolvePersonaId(
+      this.config.personas,
+      this.config.defaultPersona,
+      this.modelResolver.getPersona(key),
+    );
+  }
+
+  /** 解析指定 peer 当前生效的人格预设 */
+  getEffectivePersona(scope: ChatScope, peerId: string): PersonaPreset | undefined {
+    return findPersona(this.config.personas, this.getEffectivePersonaId(scope, peerId));
+  }
+
+  /** 是否设置了 per-chat 人格覆盖（用于区分「跟随默认」与「手动指定」） */
+  hasPersonaOverride(scope: ChatScope, peerId: string): boolean {
+    return this.modelResolver.getPersona(this.sessionKey(scope, peerId)) !== undefined;
+  }
+
+  /**
+   * 设置 per-chat 人格覆盖。
+   *
+   * 人格通过 system-prompt/assemble 每次 turn 注入，无需重建会话，
+   * 下一条消息即时生效。
+   */
+  setPersonaOverride(scope: ChatScope, peerId: string, personaId: string): boolean {
+    const persona = this.findPersonaById(personaId);
+    if (!persona) return false;
+    const key = this.sessionKey(scope, peerId);
+    this.modelResolver.setPersona(key, personaId);
+    this.logger.info(`persona switched: key=${key} → ${personaId} (next turn applies)`);
+    return true;
+  }
+
+  /** 清除 per-chat 人格覆盖，回到 config.defaultPersona */
+  clearPersonaOverride(scope: ChatScope, peerId: string): boolean {
+    const key = this.sessionKey(scope, peerId);
+    const cleared = this.modelResolver.clearPersona(key);
+    if (cleared) this.logger.info(`persona override cleared: key=${key}`);
+    return cleared;
+  }
+
+  /** 关闭当前会话的人格（写入哨兵覆盖，不影响其他会话与默认配置） */
+  disablePersona(scope: ChatScope, peerId: string): void {
+    const key = this.sessionKey(scope, peerId);
+    this.modelResolver.setPersona(key, PERSONA_OFF);
+    this.logger.info(`persona disabled: key=${key} (next turn applies)`);
   }
 
   /**

@@ -11,6 +11,7 @@ import type { CommandDeps, CategorizedCommand } from './types.ts';
 import { newCommand, compactCommand } from './session.ts';
 import { modelCommand } from './model.ts';
 import { presetCommand } from './preset.ts';
+import { personaCommand } from './persona.ts';
 import { statusCommand } from './status.ts';
 import { helpCommand } from './help.ts';
 import { pingCommand, versionCommand, stopCommand } from './misc.ts';
@@ -30,6 +31,7 @@ export function buildCommandList(deps: CommandDeps): CategorizedCommand[] {
     pingCommand(),
     versionCommand(deps),
     statusCommand(deps),
+    personaCommand(deps),
   ];
 
   // help 需要访问完整列表（含自身），通过闭包惰性引用

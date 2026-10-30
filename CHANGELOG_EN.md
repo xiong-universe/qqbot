@@ -6,6 +6,17 @@ This file records significant dsh-qqbot updates from a product perspective, focu
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.6.0] - 2026-10-30
+
+### ✨ Added
+
+- **Persona presets and switching**: new `personas` / `defaultPersona` config plus a "Persona presets" section in the settings panel, letting you split a single prompt into multiple personas. A new `/persona` (alias `/人格`) menu in QQ switches personas with one tap; `/persona default` follows the default, `/persona off` disables the persona for the current chat. Changes apply to the next message without starting a new session.
+- **Multi-message replies by line breaks**: new `replySplitMode` (`none`/`line`/`paragraph`) and `replySplitIntervalMs` split a long reply into multiple independent QQ messages by line or paragraph; code blocks and GFM tables stay intact, and streaming is disabled automatically when splitting is enabled.
+
+### Fixed
+
+- **Config saving failed with source-direct loading**: in `--patch` source-direct setups the profile directory could not be located; it is now resolved via `--profile` + `DSH_HOME` fallback.
+
 ## [0.5.4] - 2026-10-28
 
 ### ⚠️ Behavior Changes (secure defaults)

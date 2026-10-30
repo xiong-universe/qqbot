@@ -140,6 +140,27 @@ export class ModelResolver {
   }
 
   /**
+   * 获取指定 sessionKey 的 per-peer 人格覆盖
+   */
+  getPersona(sessionKey: string): string | undefined {
+    return this.prefs.getPersona(sessionKey);
+  }
+
+  /**
+   * 设置 per-peer 人格覆盖并持久化
+   */
+  setPersona(sessionKey: string, personaId: string): void {
+    this.prefs.setPersona(sessionKey, personaId);
+  }
+
+  /**
+   * 清除 per-peer 人格覆盖并持久化
+   */
+  clearPersona(sessionKey: string): boolean {
+    return this.prefs.clearPersona(sessionKey);
+  }
+
+  /**
    * 解析默认模型路由（不含 per-peer 偏好）
    *
    * 优先级：config 显式指定 > settings.yaml（只读） > 宿主 agentDefaultModel

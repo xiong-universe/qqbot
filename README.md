@@ -89,6 +89,19 @@ export QQBOT_APPID="你的AppID" QQBOT_SECRET="你的AppSecret"
 npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 ```
 
+### 方式五：从本仓库（fork）安装
+
+本仓库是 `@tencent-connect/dsh-qqbot` 的二次开发分支，构建产物 `lib/` 已入库，直接从 GitHub 安装即可，无需本地构建：
+
+- **桌面版**：左侧栏「插件」→「添加插件」→ 填入仓库地址 `https://github.com/xiong-universe/qqbot`
+- **命令行（tarball）**：
+  ```bash
+  npm pack   # 产出 tencent-connect-dsh-qqbot-0.6.0.tgz
+  npx @deepseek-ai/dsh plugin --profile qqbot add ./tencent-connect-dsh-qqbot-0.6.0.tgz
+  ```
+
+> 安装 fork 版前请先卸载官方 `@tencent-connect/dsh-qqbot`，避免同一 profile 内出现两份实例。
+
 ## 配置项
 
 | 配置 | 类型 | 默认值 | 说明 |
@@ -102,6 +115,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `requireMention` | boolean | `true` | 群聊是否需要 @bot 才触发 |
 | `groupPrompt` | string | - | 群聊额外 system prompt |
 | `directPrompt` | string | - | 私聊额外 system prompt |
+| `personas` | array | `[]` | 人格预设列表（QQ 端 `/persona` 切换），见下文 |
+| `defaultPersona` | string | `''` | 默认人格 id，留空表示不启用人格 |
 | `textChunkLimit` | number | `4500` | 单条消息最大字符数 |
 | `streaming` | boolean | `true` | 是否启用流式输出（群聊始终不启用） |
 | `replySplitMode` | `none`/`line`/`paragraph` | `none` | 回复拆分方式：`none` 只按长度切分，`line` 每个换行发一条，`paragraph` 按空行分段。开启后自动关闭流式输出 |
@@ -115,6 +130,29 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `debug` | boolean | `false` | 调试模式 |
 
 > 拆分说明：代码块与 Markdown 表格不会被拆散（整体一条）；同一 `msg_id` 最多支持 4 次被动回复，超出部分自动降级为主动推送。
+
+### 人格预设（personas）
+
+把原来的单一 prompt 拆成多套人格，可在 QQ 聊天里随时切换：
+
+```yaml
+- id: im-qqbot
+  config:
+    defaultPersona: assistant
+    personas:
+      - id: assistant
+        name: 严谨助手
+        prompt: 你是严谨、简洁的助手，回答先给结论。
+      - id: catgirl
+        name: 猫娘
+        prompt: 你是一只可爱的猫娘，句尾带「喵」。
+```
+
+- `id`：字母/数字/`-`/`_`，1–64 位，列表内唯一；`name` 是 QQ 菜单展示名；`prompt` 是该人格的 system prompt。
+- 生效优先级：QQ 端 `/persona <id>` 的本会话选择 > `defaultPersona`；都没有则不启用人格（沿用旧版 `groupPrompt`/`directPrompt`）。
+- 人格 prompt 与群聊/私聊额外 prompt 可叠加（人格定义为「是谁」，scope prompt 补充场景约束）。
+- 人格在每次构建 system prompt 时注入，切换后**下一条消息**即生效，无需 `/new`。
+- 也可以在 dsh 设置面板的「人格预设」区块里增删改，保存后自动重载。
 
 ### 访问控制（access）
 
@@ -159,6 +197,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `/compact` | 压缩会话历史（摘要替换旧记录，保留上下文） |
 | `/model` | 查看或切换模型 |
 | `/preset` | 查看或切换 agent preset（新会话生效） |
+| `/persona`（别名 `/人格`） | 查看人格菜单并切换人格（下一条消息生效）；`/persona default` 跟随默认，`/persona off` 关闭本会话人格 |
 | `/stop` | 中止当前生成 |
 | `/bot-ping` | 网络延迟检测（返回传输与处理耗时） |
 | `/bot-version` | 查看版本信息 |
@@ -200,8 +239,10 @@ src/
 │   └── idle-evictor.ts         # 闲置回收
 ├── model/                      # 模型路由层
 │   ├── model-resolver.ts       # 路由解析
-│   ├── prefs-store.ts          # per-peer 偏好持久化
+│   ├── prefs-store.ts          # per-peer 偏好持久化（模型/preset/人格）
 │   └── settings-reader.ts      # settings.yaml 只读
+├── personas/                   # 人格预设
+│   └── persona-utils.ts        # 人格解析 + system prompt section 构造
 ├── features/                   # 交互特性
 │   ├── question-channel.ts     # ask_user_question 问答通道
 │   ├── approval-channel.ts     # approval 审批确认通道

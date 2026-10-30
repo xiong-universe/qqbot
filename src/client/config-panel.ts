@@ -25,6 +25,13 @@ interface AccessControlWire {
   groupAllow: string[];
 }
 
+/** 人格预设（与 src/config.ts 的 PersonaPreset 对应的局部投影） */
+interface PersonaWire {
+  id: string;
+  name: string;
+  prompt: string;
+}
+
 /** GET 回显的生效配置（appSecret 已剔除） */
 type ReplySplitMode = 'none' | 'line' | 'paragraph';
 
@@ -40,6 +47,8 @@ type ConfigWire = {
   preset?: string;
   groupPrompt?: string;
   directPrompt?: string;
+  personas?: PersonaWire[];
+  defaultPersona?: string;
   access?: AccessControlWire;
   cwd?: string;
 };
@@ -128,6 +137,29 @@ function useConfigPanelStyles(): void {
   outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: -2px;
 }
+/* 人格预设卡片 */
+.imqb2-persona {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 0;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+.imqb2-persona-head { display: flex; align-items: center; gap: 8px; }
+.imqb2-persona-title {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.5;
+  color: var(--dsw-alias-label-primary);
+}
+.imqb2-persona-remove {
+  appearance: none; border: 0; background: transparent; padding: 2px 6px;
+  border-radius: var(--dsw-radius-sm, 6px); cursor: pointer; font: inherit;
+  font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-tertiary);
+}
+.imqb2-persona-remove:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.imqb2-persona-add {
+  appearance: none; align-self: flex-start; border: 0.5px solid var(--dsw-alias-border-l4);
+  background: transparent; border-radius: var(--dsw-radius-md, 8px); padding: 5px 12px;
+  font: inherit; font-size: 12px; line-height: 1.5; cursor: pointer;
+  color: var(--dsw-alias-label-secondary);
+}
+.imqb2-persona-add:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 /* 底栏（官方 SettingsForm.footer 复刻） */
 .imqb2-footer { display: flex; align-items: center; gap: 8px; padding-top: 16px; }
 .imqb2-note { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
@@ -237,6 +269,37 @@ function SegmentedRow({ label, help, value, options, onChange }: {
   );
 }
 
+/** 单个人格预设编辑卡片（id / 名称 / prompt） */
+function PersonaCard({ index, value, onChange, onRemove }: {
+  index: number; value: PersonaWire;
+  onChange: (next: Partial<PersonaWire>) => void; onRemove: () => void;
+}): ReactNode {
+  return createElement('div', { className: 'imqb2-persona' },
+    createElement('div', { className: 'imqb2-persona-head' },
+      createElement('span', { className: 'imqb2-persona-title' }, `人格 ${index + 1}`),
+      createElement('button', {
+        type: 'button', className: 'imqb2-persona-remove',
+        onClick: onRemove,
+      }, '删除'),
+    ),
+    createElement('input', {
+      className: 'imqb2-input', value: value.id, spellCheck: false,
+      placeholder: 'id（字母/数字/-/_，QQ 端 /persona <id> 用）',
+      onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange({ id: event.currentTarget.value }); },
+    }),
+    createElement('input', {
+      className: 'imqb2-input', value: value.name, spellCheck: false,
+      placeholder: '展示名称（QQ 菜单里显示）',
+      onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange({ name: event.currentTarget.value }); },
+    }),
+    createElement('textarea', {
+      className: 'imqb2-input imqb2-textarea', value: value.prompt, rows: 4,
+      placeholder: '该人格的 system prompt',
+      onChange: (event: ChangeEvent<HTMLTextAreaElement>) => { onChange({ prompt: event.currentTarget.value }); },
+    }),
+  );
+}
+
 type AccessMode = AccessControlWire['c2cMode'];
 
 const MODE_OPTIONS: ReadonlyArray<{ value: AccessMode; label: string }> = [
@@ -314,6 +377,18 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       };
     }
 
+    // 人格预设：提交时裁剪 id/名称，prompt 保留原文（换行有意义）
+    if (changed.personas !== undefined) {
+      changed.personas = (changed.personas as PersonaWire[]).map((p) => ({
+        id: p.id.trim(),
+        name: p.name.trim(),
+        prompt: p.prompt,
+      }));
+    }
+    if (changed.defaultPersona !== undefined) {
+      changed.defaultPersona = String(changed.defaultPersona).trim();
+    }
+
     setBusy(true);
     void fetch(BIND_CONFIG_PATH, {
       method: 'POST',
@@ -345,6 +420,37 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
 
   const dirty = (Object.keys(form) as Array<keyof ConfigWire>).some((key) => !shallowEqual(form[key], initial[key]));
   const access: AccessControlWire = form.access ?? { c2cMode: 'allowlist', c2cAllow: [], groupMode: 'open', groupAllow: [] };
+  const personas = form.personas ?? [];
+
+  const updatePersona = (index: number, next: Partial<PersonaWire>): void => {
+    const list = [...(form.personas ?? [])];
+    const current = list[index];
+    if (current === undefined) return;
+    list[index] = { ...current, ...next };
+    patch('personas', list);
+    // 改 id 时同步默认人格引用，避免默认人格指向旧 id 而失效
+    if (next.id !== undefined && current.id !== '' && form.defaultPersona === current.id) {
+      patch('defaultPersona', next.id);
+    }
+  };
+
+  const addPersona = (): void => {
+    const list = form.personas ?? [];
+    const used = new Set(list.map((p) => p.id));
+    let n = list.length + 1;
+    while (used.has(`persona-${n}`)) n += 1;
+    patch('personas', [...list, { id: `persona-${n}`, name: `人格 ${n}`, prompt: '' }]);
+  };
+
+  const removePersona = (index: number): void => {
+    const list = (form.personas ?? []).filter((_, i) => i !== index);
+    const removedId = form.personas?.[index]?.id;
+    patch('personas', list);
+    // 默认人格指向被删除条目时一并清空，避免留下失效 id
+    if (removedId !== undefined && removedId !== '' && form.defaultPersona === removedId) {
+      patch('defaultPersona', '');
+    }
+  };
 
   return createElement('form', { className: 'imqb2-form', onSubmit: submit },
     createElement('div', { className: 'imqb2-group-title' }, '服务范围'),
@@ -427,6 +533,32 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       label: '私聊额外 system prompt', value: form.directPrompt ?? '',
       onChange: (v) => { patch('directPrompt', v); },
     }),
+
+    createElement('div', { className: 'imqb2-group-title' }, '人格预设'),
+    createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 8px' } },
+      '每个人格是一套 system prompt，会叠加在群聊/私聊额外 prompt 之上。配置后可在 QQ 聊天发送 /persona（或直接点击菜单）随时切换。'),
+    personas.length === 0
+      ? createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 12px' } },
+          '尚未添加人格。添加并保存后，QQ 端 /persona 即可看到切换菜单。')
+      : null,
+    personas.map((persona, index) => createElement(PersonaCard, {
+      key: `persona-${index}`,
+      index,
+      value: persona,
+      onChange: (next) => { updatePersona(index, next); },
+      onRemove: () => { removePersona(index); },
+    })),
+    createElement('button', {
+      type: 'button', className: 'imqb2-persona-add',
+      onClick: addPersona,
+    }, '＋ 添加人格'),
+    personas.length > 0
+      ? createElement(FieldRow, {
+          label: '默认人格 id', value: form.defaultPersona ?? '', placeholder: '留空表示不启用人格',
+          help: `可用 id: ${personas.map((p) => p.id).filter(Boolean).join(', ') || '（尚未填写）'}；留空则不启用人格`,
+          onChange: (v) => { patch('defaultPersona', v); },
+        })
+      : null,
 
     form.cwd !== undefined
       ? createElement('div', { className: 'imqb2-field' },
