@@ -3,10 +3,9 @@
  *
  * 与 QQ 会话状态解耦的纯函数，便于单测：
  * - per-chat 覆盖优先，其次 config.defaultPersona
- * - 生成 system-prompt/assemble 需要的 section（人格本体 + 旧的 scope 提示词）
+ * - 生成 system-prompt/assemble 需要的 section（全局提示词 + 人格本体）
  */
 import type { PersonaPreset } from '../config.ts';
-import type { ChatScope } from '../types.ts';
 
 /** system-prompt section 最小结构 */
 export interface PromptSection {
@@ -50,23 +49,21 @@ export function resolvePersonaId(
 /**
  * 构造需要追加到 system prompt 的 section。
  *
- * 人格 prompt（order=85）先于旧版群聊/私聊额外 prompt（order=90），
- * 两者可叠加：人格定义「是谁」，scope prompt 补充「在此场景下的约束」。
+ * 全局提示词（order=80）对所有会话生效，人格 prompt（order=85）在其后：
+ * 全局部分写多条消息拆分规则等通用约束，人格只描述「是谁」。
  */
 export function buildPersonaPromptSections(
   persona: PersonaPreset | undefined,
-  scope: ChatScope,
-  groupPrompt?: string,
-  directPrompt?: string,
+  globalPrompt?: string,
 ): PromptSection[] {
   const sections: PromptSection[] = [];
+  const globalText = globalPrompt?.trim();
+  if (globalText) {
+    sections.push({ name: 'qqbot:global-prompt', order: 80, text: globalText });
+  }
   const personaText = persona?.prompt.trim();
   if (personaText) {
     sections.push({ name: 'qqbot:persona', order: 85, text: personaText });
-  }
-  const scopeText = (scope === 'group' ? groupPrompt : directPrompt)?.trim();
-  if (scopeText) {
-    sections.push({ name: 'qqbot:scope-prompt', order: 90, text: scopeText });
   }
   return sections;
 }

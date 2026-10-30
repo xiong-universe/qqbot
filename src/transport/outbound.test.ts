@@ -242,20 +242,20 @@ describe('OutboundRouter: 回复拆分', () => {
     expect(bot.sendMarkdown).toHaveBeenNthCalledWith(2, c2cTarget, '第三句');
   });
 
-  it('delimiter 模式：支持自定义分隔符', async () => {
+  it('delimiter 模式：分隔符固定为 |||（其他字符串不拆）', async () => {
     const { outbound, bot } = setup({
-      config: createConfig({ replySplitMode: 'delimiter', replySplitDelimiter: '%%' }),
+      config: createConfig({ replySplitMode: 'delimiter' }),
     });
 
     outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, {
       type: 'assistant/message',
-      data: { message: { content: [{ type: 'text', text: 'a%%b' }] } },
+      data: { message: { content: [{ type: 'text', text: 'a%%b|||c' }] } },
     });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(bot.sendMarkdown).toHaveBeenCalledTimes(2);
-    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(1, c2cTarget, 'a');
-    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(2, c2cTarget, 'b');
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(1, c2cTarget, 'a%%b');
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(2, c2cTarget, 'c');
   });
 
   it('拆分间隔：相邻消息之间等待配置的时长', async () => {

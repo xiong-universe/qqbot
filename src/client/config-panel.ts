@@ -39,15 +39,13 @@ type ConfigWire = {
   requireMention?: boolean;
   streaming?: boolean;
   replySplitMode?: ReplySplitMode;
-  replySplitDelimiter?: string;
   replySplitIntervalMs?: number;
   showToolResults?: boolean;
   debug?: boolean;
   provider?: string;
   model?: string;
   preset?: string;
-  groupPrompt?: string;
-  directPrompt?: string;
+  globalPrompt?: string;
   personas?: PersonaWire[];
   defaultPersona?: string;
   access?: AccessControlWire;
@@ -138,16 +136,36 @@ function useConfigPanelStyles(): void {
   outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: -2px;
 }
-/* 人格预设卡片 */
+/* 人格预设卡片（折叠抽屉：默认只显示标题，点击标题展开编辑） */
 .imqb2-persona {
-  display: flex; flex-direction: column; gap: 8px; padding: 12px 0;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 0;
   border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 .imqb2-persona-head { display: flex; align-items: center; gap: 8px; }
+.imqb2-persona-toggle {
+  appearance: none; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  border: 0; background: transparent; padding: 2px 0; cursor: pointer; font: inherit;
+  text-align: left; color: inherit;
+}
+.imqb2-persona-toggle:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px; border-radius: var(--dsw-radius-sm, 6px);
+}
+.imqb2-persona-arrow {
+  flex: none; font-size: 11px; line-height: 1; color: var(--dsw-alias-label-tertiary);
+  transition: transform 120ms ease;
+}
+.imqb2-persona-arrow[data-expanded='true'] { transform: rotate(90deg); }
 .imqb2-persona-title {
   flex: 1; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.5;
   color: var(--dsw-alias-label-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.imqb2-persona-sub {
+  flex: none; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.imqb2-persona-body { display: flex; flex-direction: column; gap: 8px; padding-left: 19px; }
 .imqb2-persona-remove {
   appearance: none; border: 0; background: transparent; padding: 2px 6px;
   border-radius: var(--dsw-radius-sm, 6px); cursor: pointer; font: inherit;
@@ -270,34 +288,54 @@ function SegmentedRow({ label, help, value, options, onChange }: {
   );
 }
 
-/** 单个人格预设编辑卡片（id / 名称 / prompt） */
-function PersonaCard({ index, value, onChange, onRemove }: {
-  index: number; value: PersonaWire;
-  onChange: (next: Partial<PersonaWire>) => void; onRemove: () => void;
+/**
+ * 单个人格预设编辑卡片（抽屉式：默认收起，点击标题展开 id / 名称 / prompt）
+ *
+ * 收起态只占一行，人格多时面板不会被撑得过长。
+ */
+function PersonaCard({ index, value, expanded, onChange, onToggle, onRemove }: {
+  index: number; value: PersonaWire; expanded: boolean;
+  onChange: (next: Partial<PersonaWire>) => void; onToggle: () => void; onRemove: () => void;
 }): ReactNode {
+  const title = value.name.trim() || value.id.trim() || `人格 ${index + 1}`;
   return createElement('div', { className: 'imqb2-persona' },
     createElement('div', { className: 'imqb2-persona-head' },
-      createElement('span', { className: 'imqb2-persona-title' }, `人格 ${index + 1}`),
+      createElement('button', {
+        type: 'button', className: 'imqb2-persona-toggle',
+        'aria-expanded': expanded,
+        title: expanded ? '收起' : '展开编辑',
+        onClick: onToggle,
+      },
+        createElement('span', {
+          className: 'imqb2-persona-arrow', 'data-expanded': expanded,
+        }, '▶'),
+        createElement('span', { className: 'imqb2-persona-title' }, title),
+        createElement('span', { className: 'imqb2-persona-sub' }, value.id.trim()),
+      ),
       createElement('button', {
         type: 'button', className: 'imqb2-persona-remove',
         onClick: onRemove,
       }, '删除'),
     ),
-    createElement('input', {
-      className: 'imqb2-input', value: value.id, spellCheck: false,
-      placeholder: 'id（字母/数字/-/_，QQ 端 /persona <id> 用）',
-      onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange({ id: event.currentTarget.value }); },
-    }),
-    createElement('input', {
-      className: 'imqb2-input', value: value.name, spellCheck: false,
-      placeholder: '展示名称（QQ 菜单里显示）',
-      onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange({ name: event.currentTarget.value }); },
-    }),
-    createElement('textarea', {
-      className: 'imqb2-input imqb2-textarea', value: value.prompt, rows: 4,
-      placeholder: '该人格的 system prompt',
-      onChange: (event: ChangeEvent<HTMLTextAreaElement>) => { onChange({ prompt: event.currentTarget.value }); },
-    }),
+    expanded
+      ? createElement('div', { className: 'imqb2-persona-body' },
+          createElement('input', {
+            className: 'imqb2-input', value: value.id, spellCheck: false,
+            placeholder: 'id（字母/数字/-/_，QQ 端 /persona <id> 用）',
+            onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange({ id: event.currentTarget.value }); },
+          }),
+          createElement('input', {
+            className: 'imqb2-input', value: value.name, spellCheck: false,
+            placeholder: '展示名称（QQ 菜单里显示）',
+            onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange({ name: event.currentTarget.value }); },
+          }),
+          createElement('textarea', {
+            className: 'imqb2-input imqb2-textarea', value: value.prompt, rows: 5,
+            placeholder: '该人格的 system prompt（只写角色设定/说话风格）',
+            onChange: (event: ChangeEvent<HTMLTextAreaElement>) => { onChange({ prompt: event.currentTarget.value }); },
+          }),
+        )
+      : null,
   );
 }
 
@@ -334,6 +372,8 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 人格抽屉展开状态（按索引记录；默认全部收起）
+  const [expandedPersonas, setExpandedPersonas] = useState<Set<number>>(() => new Set());
   // 绑定相位变化时重拉配置（扫码落库的白名单等新值）
   const bindPhase = props?.bindPhase;
 
@@ -390,9 +430,6 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     if (changed.defaultPersona !== undefined) {
       changed.defaultPersona = String(changed.defaultPersona).trim();
     }
-    if (changed.replySplitDelimiter !== undefined) {
-      changed.replySplitDelimiter = String(changed.replySplitDelimiter).trim();
-    }
 
     setBusy(true);
     void fetch(BIND_CONFIG_PATH, {
@@ -439,18 +476,38 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }
   };
 
+  const togglePersona = (index: number): void => {
+    setExpandedPersonas((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
   const addPersona = (): void => {
     const list = form.personas ?? [];
     const used = new Set(list.map((p) => p.id));
     let n = list.length + 1;
     while (used.has(`persona-${n}`)) n += 1;
     patch('personas', [...list, { id: `persona-${n}`, name: `人格 ${n}`, prompt: '' }]);
+    // 新增后自动展开，方便直接编辑
+    setExpandedPersonas((current) => new Set(current).add(list.length));
   };
 
   const removePersona = (index: number): void => {
     const list = (form.personas ?? []).filter((_, i) => i !== index);
     const removedId = form.personas?.[index]?.id;
     patch('personas', list);
+    // 删除后索引整体前移，展开状态需要同步重映射
+    setExpandedPersonas((current) => {
+      const next = new Set<number>();
+      for (const i of current) {
+        if (i === index) continue;
+        next.add(i > index ? i - 1 : i);
+      }
+      return next;
+    });
     // 默认人格指向被删除条目时一并清空，避免留下失效 id
     if (removedId !== undefined && removedId !== '' && form.defaultPersona === removedId) {
       patch('defaultPersona', '');
@@ -490,21 +547,18 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }),
     createElement(SwitchRow, {
       label: '流式输出', checked: form.streaming ?? true,
-      help: '回复内容分段实时推送到聊天（开启换行拆分时自动失效）',
+      help: '回复内容分段实时推送到聊天（开启回复拆分时自动失效）',
       onChange: (v) => { patch('streaming', v); },
     }),
     createElement(SegmentedRow, {
       label: '回复拆分', value: form.replySplitMode ?? 'none', options: SPLIT_OPTIONS,
-      help: '推荐「约定分隔符」：模型输出 ||| 时才拆条，正文换行不会拆；开启后自动关闭流式输出',
+      help: '推荐「约定分隔符」：模型输出固定分隔符 ||| 时才拆条，正文换行不会拆；开启后自动关闭流式输出',
       onChange: (v) => { patch('replySplitMode', v as ReplySplitMode); },
     }),
     form.replySplitMode === 'delimiter'
-      ? createElement(FieldRow, {
-          label: '分隔符', value: form.replySplitDelimiter ?? '|||',
-          placeholder: '|||',
-          help: '模型输出该字符串时拆成多条消息（代码块内不拆）；需同步写进人格提示词',
-          onChange: (v) => { patch('replySplitDelimiter', v); },
-        })
+      ? createElement('p', {
+          className: 'imqb2-hint', style: { padding: '0 0 8px' },
+        }, '分隔符固定为 |||（不可配置）；拆条规则写在下方「全局提示词」里即可对整个机器人生效')
       : null,
     form.replySplitMode !== undefined && form.replySplitMode !== 'none'
       ? createElement(FieldRow, {
@@ -537,19 +591,17 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       onChange: (v) => { patch('preset', v); },
     }),
 
-    createElement('div', { className: 'imqb2-group-title' }, '个性化提示词'),
+    createElement('div', { className: 'imqb2-group-title' }, '全局提示词'),
     createElement(AreaRow, {
-      label: '群聊额外 system prompt', value: form.groupPrompt ?? '',
-      onChange: (v) => { patch('groupPrompt', v); },
-    }),
-    createElement(AreaRow, {
-      label: '私聊额外 system prompt', value: form.directPrompt ?? '',
-      onChange: (v) => { patch('directPrompt', v); },
+      label: '全局 system prompt', rows: 6,
+      help: '对所有群聊/私聊生效。把「多条消息用固定分隔符 ||| 分隔」这类通用规则写在这里，人格里只写角色设定。',
+      value: form.globalPrompt ?? '',
+      onChange: (v) => { patch('globalPrompt', v); },
     }),
 
     createElement('div', { className: 'imqb2-group-title' }, '人格预设'),
     createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 8px' } },
-      '每个人格是一套 system prompt，会叠加在群聊/私聊额外 prompt 之上。配置后可在 QQ 聊天发送 /persona（或直接点击菜单）随时切换。'),
+      '每个人格是一套角色 system prompt，叠加在全局提示词之上。点击标题展开编辑，配置后可在 QQ 聊天发送 /persona（或直接点击菜单）按会话切换。'),
     personas.length === 0
       ? createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 12px' } },
           '尚未添加人格。添加并保存后，QQ 端 /persona 即可看到切换菜单。')
@@ -558,7 +610,9 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       key: `persona-${index}`,
       index,
       value: persona,
+      expanded: expandedPersonas.has(index),
       onChange: (next) => { updatePersona(index, next); },
+      onToggle: () => { togglePersona(index); },
       onRemove: () => { removePersona(index); },
     })),
     createElement('button', {

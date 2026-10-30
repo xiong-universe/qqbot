@@ -113,14 +113,12 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `preset` | string | - | Agent preset id |
 | `cwd` | string | `process.cwd()` | Agent 工作目录 |
 | `requireMention` | boolean | `true` | 群聊是否需要 @bot 才触发 |
-| `groupPrompt` | string | - | 群聊额外 system prompt |
-| `directPrompt` | string | - | 私聊额外 system prompt |
+| `globalPrompt` | string | `''` | 全局 system prompt：对所有群聊/私聊生效（多条消息拆分规则建议写在这里） |
 | `personas` | array | `[]` | 人格预设列表（QQ 端 `/persona` 切换），见下文 |
 | `defaultPersona` | string | `''` | 默认人格 id，留空表示不启用人格 |
 | `textChunkLimit` | number | `4500` | 单条消息最大字符数 |
 | `streaming` | boolean | `true` | 是否启用流式输出（群聊始终不启用） |
-| `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | 回复拆分方式：`delimiter` 只在约定分隔符处拆（推荐），`none` 只按长度切分，`line` 每个换行发一条，`paragraph` 按空行分段。开启后自动关闭流式输出 |
-| `replySplitDelimiter` | string | `|||` | `delimiter` 模式的分隔符：模型输出中出现它才拆条（1–16 字符，不含空白） |
+| `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | 回复拆分方式：`delimiter` 只在固定分隔符 `|||` 处拆（推荐），`none` 只按长度切分，`line` 每个换行发一条，`paragraph` 按空行分段。开启后自动关闭流式输出 |
 | `replySplitIntervalMs` | number | `0` | 拆分后相邻消息的间隔(ms)，`0` 表示立即顺序发送；遇到平台限流可调大 |
 | `sessionIdleTimeout` | number | `1800000` | 会话闲置超时(ms)，默认 30 分钟 |
 | `processingTimeoutMs` | number | `1800000` | 处理超时(ms)，超时中断当前 LLM 调用 |
@@ -130,7 +128,22 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `showToolResults` | boolean | `false` | 是否展示工具调用成功结果（错误始终展示） |
 | `debug` | boolean | `false` | 调试模式 |
 
-> 拆分说明：推荐 `replySplitMode: delimiter` + `replySplitDelimiter: '|||'`，让模型只在 `|||` 处拆条，正文换行不会触发多条消息；代码块内的分隔符不拆，整体一条。同一 `msg_id` 最多支持 4 次被动回复，超出部分自动降级为主动推送。
+> 拆分说明：推荐 `replySplitMode: delimiter`，分隔符固定为 `|||`（不可配置），模型只在 `|||` 处拆条，正文换行不会触发多条消息；代码块内的分隔符不拆，整体一条。同一 `msg_id` 最多支持 4 次被动回复，超出部分自动降级为主动推送。
+
+### 全局提示词（globalPrompt）
+
+`globalPrompt` 对所有群聊/私聊生效，适合放通用约束（如多条消息拆条规则、语气底线）：
+
+```yaml
+- id: im-qqbot
+  config:
+    replySplitMode: delimiter
+    globalPrompt: |
+      【多条消息规则】
+      - 想把一句话拆成多条气泡时，用固定分隔符 ||| 分隔，例如：真的假的|||你别骗我
+      - 只有情绪转折、补充吐槽或停顿时才拆；普通回答不要拆，一次最多 3 条
+      - 绝对不要用换行符来分条；一条消息内部可以正常换行
+```
 
 ### 人格预设（personas）
 
@@ -151,11 +164,11 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 - `id`：字母/数字/`-`/`_`，1–64 位，列表内唯一；`name` 是 QQ 菜单展示名；`prompt` 是该人格的 system prompt。
 - **人格按会话隔离**：群聊按群 ID、私聊按用户 ID 分别记录，同一个群里切人格不会影响其他群或其他私聊。
-- 生效优先级：本会话 `/persona <id>` 选择 > `defaultPersona`；都没有则不启用人格（沿用旧版 `groupPrompt`/`directPrompt`）。
-- 人格 prompt 与群聊/私聊额外 prompt 可叠加（人格定义为「是谁」，scope prompt 补充场景约束）。
+- 生效优先级：本会话 `/persona <id>` 选择 > `defaultPersona`；都没有则不启用人格（仅保留 `globalPrompt`）。
+- 注入顺序：`globalPrompt`（order 80）→ 人格 prompt（order 85）；人格只描述「是谁」，拆条等通用规则统一写在 `globalPrompt`。
 - 人格在每次构建 system prompt 时注入，切换后**下一条消息**即生效，无需 `/new`。
-- 建议在人格 prompt 里约定多条消息分隔符：`需要分多条气泡时用 ||| 分隔，普通回答不要拆`，并配合 `replySplitMode: delimiter`。
-- 也可以在 dsh 设置面板的「人格预设」区块里增删改，保存后自动重载。
+- 多条消息统一用固定分隔符 `|||`，并配合 `replySplitMode: delimiter`；人格 prompt 里无需重复约定。
+- 也可以在 dsh 设置面板的「人格预设」区块里增删改（卡片默认收起，点击展开编辑），保存后自动重载。
 
 ### 访问控制（access）
 

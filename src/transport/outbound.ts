@@ -173,7 +173,6 @@ class OutboundRouter {
         this.shouldStream(record),
         this.config.replySplitMode ?? 'none',
         this.config.replySplitIntervalMs ?? 0,
-        this.config.replySplitDelimiter,
       );
       this.buffers.set(sessionId, buffer);
     }
@@ -303,7 +302,6 @@ class OutboundRouter {
       {
         limit: this.config.textChunkLimit,
         splitMode: this.config.replySplitMode ?? 'none',
-        splitDelimiter: this.config.replySplitDelimiter,
         intervalMs: this.config.replySplitIntervalMs ?? 0,
       },
       this.logger,

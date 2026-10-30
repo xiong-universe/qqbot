@@ -6,6 +6,17 @@ This file records significant dsh-qqbot updates from a product perspective, focu
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.8.0] - 2026-10-30
+
+### ⚠️ Breaking changes
+
+- **Per-scope prompts merged into a global prompt**: `groupPrompt` / `directPrompt` (and their panel fields) are removed in favor of a single `globalPrompt` applied to all group and direct chats. Shared rules such as multi-message splitting now live there; personas only describe the character.
+- **Split delimiter fixed to `|||`**: `replySplitDelimiter` is removed. `replySplitMode: delimiter` always uses the fixed `|||` delimiter, so personas no longer need to repeat it.
+
+### ✨ Improvements
+
+- **Collapsible persona cards**: persona cards in the settings panel start collapsed, showing only name and id; click the header to expand and edit (new personas expand automatically). The panel no longer grows unbounded with many personas.
+
 ## [0.7.0] - 2026-10-30
 
 ### ✨ Added

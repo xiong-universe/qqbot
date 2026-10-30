@@ -77,8 +77,12 @@ describe('splitReplyText: delimiter', () => {
     ]);
   });
 
-  it('支持自定义分隔符，丢弃首尾空段并裁剪空白', () => {
-    expect(splitReplyText('  a  %%  b %%  ', 'delimiter', '%%')).toEqual(['a', 'b']);
+  it('分隔符固定为 |||，丢弃首尾空段并裁剪空白', () => {
+    expect(splitReplyText('  a  |||  b |||  ', 'delimiter')).toEqual(['a', 'b']);
+  });
+
+  it('不是 ||| 的字符串不拆（如 %% 视为正文）', () => {
+    expect(splitReplyText('a %% b', 'delimiter')).toEqual(['a %% b']);
   });
 
   it('CRLF 归一化后再拆', () => {

@@ -8,7 +8,7 @@ import type { InlineKeyboard } from '@tencent-connect/qqbot-nodejs';
 import type { SessionRecord } from '../session/index.ts';
 import type { Logger, ReplyTarget } from '../types.ts';
 import { sendTextParts } from './send-text.ts';
-import { DEFAULT_SPLIT_DELIMITER, type ReplySplitMode } from './splitter.ts';
+import type { ReplySplitMode } from './splitter.ts';
 import { StreamingWriter } from './streaming-writer.ts';
 
 /** 流式输出节流间隔(ms)：连续 chunk 累积后停顿该间隔才推送 */
@@ -35,7 +35,6 @@ export class OutboundBuffer {
   private readonly limit: number;
   private readonly logger: Logger;
   private readonly splitMode: ReplySplitMode;
-  private readonly splitDelimiter: string;
   private readonly intervalMs: number;
 
   public constructor(
@@ -46,14 +45,12 @@ export class OutboundBuffer {
     streamingEnabled: boolean,
     splitMode: ReplySplitMode = 'none',
     intervalMs = 0,
-    splitDelimiter: string = DEFAULT_SPLIT_DELIMITER,
   ) {
     this.record = record;
     this.bot = bot;
     this.limit = limit;
     this.logger = logger;
     this.splitMode = splitMode;
-    this.splitDelimiter = splitDelimiter;
     this.intervalMs = intervalMs;
     this.writer = streamingEnabled
       ? new StreamingWriter({ bot, target: record.replyTarget, logger, throttleMs: STREAM_THROTTLE_MS })
@@ -89,7 +86,7 @@ export class OutboundBuffer {
         if (!this.writer.shouldFallback) return;
       }
 
-      // 降级：静态发送（writer 不存在 or 流式失败），支持按约定分隔符拆分
+      // 降级：静态发送（writer 不存在 or 流式失败），支持按固定分隔符拆分
       await sendTextParts(
         this.bot,
         this.record.replyTarget,
@@ -97,7 +94,6 @@ export class OutboundBuffer {
         {
           limit: this.limit,
           splitMode: this.splitMode,
-          splitDelimiter: this.splitDelimiter,
           intervalMs: this.intervalMs,
         },
         this.logger,

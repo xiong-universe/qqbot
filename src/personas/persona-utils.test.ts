@@ -49,21 +49,25 @@ describe('resolvePersonaId', () => {
 });
 
 describe('buildPersonaPromptSections', () => {
-  it('人格 + 群聊 scope prompt 叠加，顺序 85/90', () => {
-    const sections = buildPersonaPromptSections(personas[0], 'group', '群规：别刷屏', undefined);
+  it('全局提示词 + 人格叠加，顺序 80/85', () => {
+    const sections = buildPersonaPromptSections(personas[0], '多条消息用 ||| 分隔');
     expect(sections).toEqual([
+      { name: 'qqbot:global-prompt', order: 80, text: '多条消息用 ||| 分隔' },
       { name: 'qqbot:persona', order: 85, text: '你是一只猫娘。' },
-      { name: 'qqbot:scope-prompt', order: 90, text: '群规：别刷屏' },
     ]);
   });
 
-  it('未启用人格时只保留旧版 scope prompt（向后兼容）', () => {
-    const sections = buildPersonaPromptSections(undefined, 'c2c', undefined, '私聊提示词');
-    expect(sections).toEqual([{ name: 'qqbot:scope-prompt', order: 90, text: '私聊提示词' }]);
+  it('未启用人格时只保留全局提示词', () => {
+    const sections = buildPersonaPromptSections(undefined, '全局规则');
+    expect(sections).toEqual([{ name: 'qqbot:global-prompt', order: 80, text: '全局规则' }]);
+  });
+
+  it('未配置全局提示词时只保留人格', () => {
+    const sections = buildPersonaPromptSections(personas[1], '');
+    expect(sections).toEqual([{ name: 'qqbot:persona', order: 85, text: '你是严谨的助手。' }]);
   });
 
   it('空白 prompt 不产生 section', () => {
-    expect(buildPersonaPromptSections({ id: 'x', name: 'x', prompt: '  ' }, 'c2c', '  ', '  '))
-      .toEqual([]);
+    expect(buildPersonaPromptSections({ id: 'x', name: 'x', prompt: '  ' }, '  ')).toEqual([]);
   });
 });

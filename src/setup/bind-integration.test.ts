@@ -184,8 +184,7 @@ describe('绑定链路 × 真实 persist 落盘（#53 回归）', () => {
       debug: true,
       provider: 'pi-ai',
       model: 'deepseek-chat',
-      groupPrompt: '群聊提示词',
-      directPrompt: '私聊提示词',
+      globalPrompt: '全局提示词',
       access: { c2cMode: 'allowlist', c2cAllow: ['u1'], groupMode: 'open', groupAllow: [] },
     })), res);
 
@@ -193,7 +192,7 @@ describe('绑定链路 × 真实 persist 落盘（#53 回归）', () => {
     const after = readFileSync(patchPath, 'utf8');
     for (const expected of [
       'requireMention: false', 'streaming: false', 'showToolResults: true', 'debug: true',
-      "provider: pi-ai", 'groupPrompt: 群聊提示词', 'directPrompt: 私聊提示词',
+      "provider: pi-ai", 'globalPrompt: 全局提示词',
       'c2cMode: allowlist', 'c2cAllow:', '- u1',
     ]) {
       expect(after).toContain(expected);
@@ -264,7 +263,7 @@ describe('绑定链路 × 真实 persist 落盘（#53 回归）', () => {
     const routes = registerRealRoutes(() => null);
     const longPrompt = '你是一个专业的 QQ 群助手。'.repeat(400); // ~8KB UTF-8
     const res = fakeRes();
-    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('POST', JSON.stringify({ groupPrompt: longPrompt })), res);
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('POST', JSON.stringify({ globalPrompt: longPrompt })), res);
 
     expect(res.statusCode).toBe(200);
     const after = readFileSync(patchPath, 'utf8');

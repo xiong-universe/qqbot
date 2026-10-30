@@ -77,22 +77,18 @@ export interface ImQQBotConfig {
   cwd?: string;
   /** 是否启用群消息 @mention 门控 */
   requireMention: boolean;
-  /** 群聊额外 system prompt */
-  groupPrompt?: string;
-  /** 私聊额外 system prompt */
-  directPrompt?: string;
+  /** 全局 system prompt（所有群聊/私聊生效，不含人格差异） */
+  globalPrompt: string;
   /** 人格预设列表（QQ 端 /persona 切换） */
   personas: PersonaPreset[];
-  /** 默认人格 id；空字符串 = 不启用人格（沿用旧版 groupPrompt/directPrompt） */
+  /** 默认人格 id；空字符串 = 不启用默认人格 */
   defaultPersona: string;
   /** 单条消息最大长度（QQ 限制约 5000 字符） */
   textChunkLimit: number;
   /** 是否启用流式输出（群聊始终不启用） */
   streaming: boolean;
-  /** 回复拆分方式：none=仅按长度切分；delimiter=按约定分隔符；line=每个换行一条；paragraph=按空行分段 */
+  /** 回复拆分方式：none=仅按长度切分；delimiter=按固定分隔符 |||；line=每个换行一条；paragraph=按空行分段 */
   replySplitMode: 'none' | 'delimiter' | 'line' | 'paragraph';
-  /** delimiter 模式的分隔符（模型输出中出现它才拆条），默认 ||| */
-  replySplitDelimiter: string;
   /** 拆分后每条消息之间的间隔(ms)，0=不等候（顺序发送，避免平台限流时可用） */
   replySplitIntervalMs: number;
   /** 每会话最大闲置时长(ms)，超时自动回收 */
@@ -142,18 +138,16 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
   preset: Schema.string().description('Agent preset id'),
   cwd: Schema.string().description('Agent working directory (default ~/.dsh-qqbot/workspace)'),
   requireMention: Schema.boolean().default(true).description('群聊是否需要@bot触发'),
-  groupPrompt: Schema.string().description('群聊额外system prompt'),
-  directPrompt: Schema.string().description('私聊额外system prompt'),
+  globalPrompt: Schema.string().default('')
+    .description('全局 system prompt（所有群聊/私聊生效，建议写多条消息分隔规则）'),
   personas: Schema.array(PersonaPresetSchema).default([])
     .description('人格预设列表（QQ 端 /persona 切换）'),
   defaultPersona: Schema.string().default('')
-    .description('默认人格 id，留空表示不启用人格'),
+    .description('默认人格 id，留空表示不启用默认人格'),
   textChunkLimit: Schema.number().default(4500).description('单条消息最大字符数'),
   streaming: Schema.boolean().default(true).description('是否启用流式输出（群聊始终不启用）'),
   replySplitMode: Schema.union(['none', 'delimiter', 'line', 'paragraph']).default('none')
-    .description('回复拆分方式：none=按长度，delimiter=按约定分隔符（推荐），line=每个换行一条，paragraph=按空行分段'),
-  replySplitDelimiter: Schema.string().default('|||')
-    .description('delimiter 模式的分隔符：模型输出中出现它才拆条（默认 |||）'),
+    .description('回复拆分方式：none=按长度，delimiter=按固定分隔符 |||（推荐），line=每个换行一条，paragraph=按空行分段'),
   replySplitIntervalMs: Schema.number().default(0)
     .description('拆分后每条消息之间的间隔(ms)，0=不等候'),
   sessionIdleTimeout: Schema.number().default(30 * 60 * 1000).description('会话闲置超时(ms)'),

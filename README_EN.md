@@ -100,10 +100,13 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `preset` | string | - | Agent preset id |
 | `cwd` | string | `process.cwd()` | Agent working directory |
 | `requireMention` | boolean | `true` | Whether group messages require @bot to trigger |
-| `groupPrompt` | string | - | Extra system prompt for group chats |
-| `directPrompt` | string | - | Extra system prompt for direct chats |
+| `globalPrompt` | string | `''` | Global system prompt applied to all group/direct chats (put split rules here) |
+| `personas` | array | `[]` | Persona presets (switchable via `/persona` in QQ) |
+| `defaultPersona` | string | `''` | Default persona id; empty disables personas |
 | `textChunkLimit` | number | `4500` | Max chars per message |
 | `streaming` | boolean | `true` | Enable streaming output (always disabled in groups) |
+| `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | Reply split mode: `delimiter` splits only at the fixed `|||` delimiter; splitting disables streaming |
+| `replySplitIntervalMs` | number | `0` | Delay between split messages (ms), `0` = send immediately |
 | `sessionIdleTimeout` | number | `1800000` | Session idle timeout (ms), default 30 min |
 | `processingTimeoutMs` | number | `1800000` | Processing timeout (ms), aborts the current LLM call |
 | `maxQueue` | number | `20` | Max concurrent queue length |

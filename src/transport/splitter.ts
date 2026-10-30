@@ -9,8 +9,8 @@
 
 export type ReplySplitMode = 'none' | 'line' | 'paragraph' | 'delimiter';
 
-/** 默认多消息分隔符（模型输出中出现它才拆条） */
-export const DEFAULT_SPLIT_DELIMITER = '|||';
+/** 多消息固定分隔符（不可配置：全局提示词里也约定这个值） */
+export const SPLIT_DELIMITER = '|||';
 
 const FENCE = /^```/;
 const TABLE_ROW = /^\|/;
@@ -124,15 +124,13 @@ function splitParagraphs(text: string): string[] {
 }
 
 /**
- * 按约定分隔符拆分。
+ * 按固定分隔符 `|||` 拆分。
  *
  * - 只有出现分隔符才拆；一条回复可拆成多段，段内换行原样保留。
  * - 围栏代码块内的分隔符不拆（避免代码里的 `|||` 误伤）。
  * - 段首尾空白会被裁掉；空段丢弃。
  */
-function splitByDelimiter(text: string, delimiter: string): string[] {
-  if (delimiter === '') return [text];
-
+function splitByDelimiter(text: string): string[] {
   const blocks: string[] = [];
   const masked = text.replace(FENCE_BLOCK, (block) => {
     blocks.push(block);
@@ -140,7 +138,7 @@ function splitByDelimiter(text: string, delimiter: string): string[] {
   });
 
   return masked
-    .split(delimiter)
+    .split(SPLIT_DELIMITER)
     .map((part) => part.replace(MASK, (_, index: string) => blocks[Number(index)] ?? ''))
     .map((part) => part.trim())
     .filter((part) => part !== '');
@@ -149,19 +147,14 @@ function splitByDelimiter(text: string, delimiter: string): string[] {
 /**
  * 拆分回复文本。
  *
- * @param mode none=原样一条；delimiter=按约定分隔符（推荐）；
+ * @param mode none=原样一条；delimiter=按固定分隔符 |||（推荐）；
  *             line=每个换行一条；paragraph=按空行分段
- * @param delimiter delimiter 模式使用的分隔符，默认 `|||`
  */
-export function splitReplyText(
-  text: string,
-  mode: ReplySplitMode = 'none',
-  delimiter: string = DEFAULT_SPLIT_DELIMITER,
-): string[] {
+export function splitReplyText(text: string, mode: ReplySplitMode = 'none'): string[] {
   if (text.trim() === '') return [];
   if (mode === 'none') return [text];
 
   const normalized = text.replace(/\r\n?/g, '\n');
-  if (mode === 'delimiter') return splitByDelimiter(normalized, delimiter);
+  if (mode === 'delimiter') return splitByDelimiter(normalized);
   return mode === 'line' ? splitLines(normalized) : splitParagraphs(normalized);
 }
