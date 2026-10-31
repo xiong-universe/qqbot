@@ -6,8 +6,9 @@
  */
 import type { CommandDeps, CategorizedCommand } from './types.ts';
 import { sendMarkdownChunked, PLUGIN_VERSION } from '../shared/index.ts';
+import { canUseCommand } from '../identity/role.ts';
 
-/** /bot-help — 分组查看所有指令 */
+/** /bot-help — 分组查看当前身份可用的指令 */
 export function helpCommand(
   { config }: CommandDeps,
   allCommands: () => CategorizedCommand[],
@@ -15,12 +16,15 @@ export function helpCommand(
   return {
     name: 'bot-help',
     category: 'qqbot',
-    description: '查看所有指令',
+    description: '查看可用指令',
     handler: async (cmdCtx) => {
       const agentCmds: CategorizedCommand[] = [];
       const qqbotCmds: CategorizedCommand[] = [];
+      // 与 authorized 钩子用同一套规则：非管理员看不到管理类指令
+      const senderId = cmdCtx.message.senderId;
       for (const cmd of allCommands()) {
         if (cmd.hidden) continue;
+        if (!canUseCommand(senderId, config.identity, cmd.minRole)) continue;
         (cmd.category === 'agent' ? agentCmds : qqbotCmds).push(cmd);
       }
 

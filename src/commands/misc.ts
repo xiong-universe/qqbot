@@ -6,6 +6,7 @@
  */
 import type { CommandDeps, CategorizedCommand } from './types.ts';
 import { getScopePeer, PLUGIN_VERSION } from '../shared/index.ts';
+import { canUseCommand } from '../identity/role.ts';
 
 /** /bot-ping — 测试当前 dsh 与 QQ 连接的网络延迟 */
 export function pingCommand(): CategorizedCommand {
@@ -39,13 +40,17 @@ export function pingCommand(): CategorizedCommand {
   };
 }
 
-/** /bot-version — 查看版本信息 */
-export function versionCommand({ manager }: CommandDeps): CategorizedCommand {
+/** /bot-version — 查看版本信息（模型信息仅管理员可见） */
+export function versionCommand({ manager, config }: CommandDeps): CategorizedCommand {
   return {
     name: 'bot-version',
     category: 'qqbot',
     description: '查看版本信息',
-    handler: () => {
+    handler: (ctx) => {
+      // 非管理员只回版本号，避免泄露当前模型配置
+      if (!canUseCommand(ctx.message.senderId, config.identity, 'admin')) {
+        return `dsh-qqbot v${PLUGIN_VERSION}`;
+      }
       const current = manager.getEffectiveModel('c2c', '');
       const modelInfo = current ? `${current.provider}/${current.model}` : '宿主默认';
       return `dsh-qqbot v${PLUGIN_VERSION} | model: ${modelInfo}`;
@@ -60,6 +65,7 @@ export function stopCommand({ manager }: CommandDeps): CategorizedCommand {
     category: 'agent',
     description: '中止当前生成',
     hidden: true,
+    minRole: 'admin',
     handler: (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       const record = manager.getSessionRecord(scope, peerId);

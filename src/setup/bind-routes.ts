@@ -94,6 +94,8 @@ const EDITABLE_CONFIG_KEYS = new Set([
   'provider', 'model', 'preset',
   'globalPrompt',
   'personas', 'defaultPersona',
+  'identity',
+  'memory',
   'access',
 ]);
 
@@ -111,6 +113,8 @@ const EDITABLE_CONFIG_SCHEMAS: Record<string, (value: unknown) => unknown> = {
   globalPrompt: stringSchema('globalPrompt'),
   personas: (v) => personasSchema(v),
   defaultPersona: (v) => defaultPersonaSchema(v),
+  identity: (v) => identitySchema(v),
+  memory: (v) => memorySchema(v),
   access: (v) => AccessControlSchema(v as never),
 };
 
@@ -155,8 +159,36 @@ const MAX_PERSONAS = 20;
 /** 单个人格 prompt 长度上限 */
 const MAX_PERSONA_PROMPT = 10000;
 
-/** 人格预设数组校验：id 形态/唯一、名称与 prompt 长度；返回规范化的数组 */
-function personasSchema(value: unknown): Array<{ id: string; name: string; prompt: string }> {
+/** 工具名字符集（dsh 工具名，如 qqbot_send_file / web_search） */
+const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
+/** 单个人格最多绑定的工具数 */
+const MAX_PERSONA_TOOLS = 64;
+
+/** 人格工具白名单：去空、去重、校验字符集；空数组合法（表示无工具） */
+function personaToolsSchema(value: unknown, index: number): string[] {
+  if (!Array.isArray(value)) throw new TypeError(`personas[${index}].tools 必须是数组`);
+  if (value.length > MAX_PERSONA_TOOLS) {
+    throw new TypeError(`personas[${index}].tools 最多 ${MAX_PERSONA_TOOLS} 个`);
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') throw new TypeError(`personas[${index}].tools 只能是字符串`);
+    const name = item.trim();
+    if (name === '') continue;
+    if (!TOOL_NAME_PATTERN.test(name)) {
+      throw new TypeError(`personas[${index}].tools 含非法工具名: ${name}`);
+    }
+    const dedupeKey = name.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    result.push(name);
+  }
+  return result;
+}
+
+/** 人格预设数组校验：id 形态/唯一、名称与 prompt 长度、工具白名单；返回规范化的数组 */
+function personasSchema(value: unknown): Array<{ id: string; name: string; prompt: string; tools?: string[] }> {
   if (!Array.isArray(value)) throw new TypeError('personas 必须是数组');
   if (value.length > MAX_PERSONAS) throw new TypeError(`personas 最多 ${MAX_PERSONAS} 条`);
   const seen = new Set<string>();
@@ -177,7 +209,10 @@ function personasSchema(value: unknown): Array<{ id: string; name: string; promp
     if (prompt.length > MAX_PERSONA_PROMPT) {
       throw new TypeError(`personas[${index}].prompt 过长（≤${MAX_PERSONA_PROMPT}）`);
     }
-    return { id, name: name || id, prompt };
+    const tools = record.tools === undefined || record.tools === null
+      ? undefined
+      : personaToolsSchema(record.tools, index);
+    return { id, name: name || id, prompt, ...(tools !== undefined ? { tools } : {}) };
   });
 }
 
@@ -187,6 +222,92 @@ function defaultPersonaSchema(value: unknown): string {
   const id = value.trim();
   if (id.length > 64) throw new TypeError('defaultPersona 过长（≤64）');
   return id;
+}
+
+/** 每份身份名单的条数上限（openid 短标识，避免单次写入 patch 过大） */
+const MAX_IDENTITY_IDS = 200;
+/** 单个 openid 长度上限（QQ openid 通常 32 位十六进制） */
+const MAX_OPENID_LEN = 128;
+
+/** 身份名单：字符串数组 → 去空白、忽略大小写去重 */
+function openIdListSchema(value: unknown, key: string): string[] {
+  if (!Array.isArray(value)) throw new TypeError(`identity.${key} 必须是数组`);
+  if (value.length > MAX_IDENTITY_IDS) {
+    throw new TypeError(`identity.${key} 最多 ${MAX_IDENTITY_IDS} 条`);
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') throw new TypeError(`identity.${key} 只能是字符串`);
+    const id = item.trim();
+    if (id === '') continue;
+    if (id.length > MAX_OPENID_LEN) throw new TypeError(`identity.${key} 单个 openid 过长（≤${MAX_OPENID_LEN}）`);
+    const dedupeKey = id.toUpperCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    result.push(id);
+  }
+  return result;
+}
+
+/** 身份识别配置：开关 + 三份名单 */
+function identitySchema(value: unknown): {
+  enabled: boolean;
+  ownerOpenIds: string[];
+  adminOpenIds: string[];
+  friendOpenIds: string[];
+} {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('identity 必须是对象');
+  }
+  const record = value as Record<string, unknown>;
+  if (record.enabled !== undefined && typeof record.enabled !== 'boolean') {
+    throw new TypeError('identity.enabled 必须是布尔值');
+  }
+  return {
+    enabled: record.enabled !== false,
+    ownerOpenIds: openIdListSchema(record.ownerOpenIds ?? [], 'ownerOpenIds'),
+    adminOpenIds: openIdListSchema(record.adminOpenIds ?? [], 'adminOpenIds'),
+    friendOpenIds: openIdListSchema(record.friendOpenIds ?? [], 'friendOpenIds'),
+  };
+}
+
+/** 每个会话记忆条数范围（与 config.ts 的 maxNotes 对齐） */
+const MIN_MEMORY_NOTES = 1;
+const MAX_MEMORY_NOTES = 100;
+
+/** 记忆与关系状态：两个开关 + 条数上限（超范围拒绝，避免无意义的大文件） */
+function memorySchema(value: unknown): {
+  enabled: boolean;
+  autoCapture: boolean;
+  maxNotes: number;
+} {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('memory 必须是对象');
+  }
+  const record = value as Record<string, unknown>;
+  if (record.enabled !== undefined && typeof record.enabled !== 'boolean') {
+    throw new TypeError('memory.enabled 必须是布尔值');
+  }
+  if (record.autoCapture !== undefined && typeof record.autoCapture !== 'boolean') {
+    throw new TypeError('memory.autoCapture 必须是布尔值');
+  }
+  const rawNotes = record.maxNotes;
+  let maxNotes = 20;
+  if (rawNotes !== undefined) {
+    if (typeof rawNotes !== 'number' || !Number.isFinite(rawNotes)) {
+      throw new TypeError('memory.maxNotes 必须是数字');
+    }
+    if (!Number.isInteger(rawNotes) || rawNotes < MIN_MEMORY_NOTES || rawNotes > MAX_MEMORY_NOTES) {
+      throw new TypeError(`memory.maxNotes 必须是 ${MIN_MEMORY_NOTES}–${MAX_MEMORY_NOTES} 之间的整数`);
+    }
+    maxNotes = rawNotes;
+  }
+  return {
+    enabled: record.enabled !== false,
+    autoCapture: record.autoCapture !== false,
+    maxNotes,
+  };
 }
 
 /** manual 请求体大小上限（appId + appSecret 远小于此值） */

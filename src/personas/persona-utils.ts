@@ -46,11 +46,16 @@ export function resolvePersonaId(
   return undefined;
 }
 
+/** 人格 prompt 之后、记忆之前的工具权限说明（order 86） */
+export const PERSONA_TOOLS_ORDER = 86;
+
 /**
  * 构造需要追加到 system prompt 的 section。
  *
  * 全局提示词（order=80）对所有会话生效，人格 prompt（order=85）在其后：
  * 全局部分写多条消息拆分规则等通用约束，人格只描述「是谁」。
+ * 人格配置了工具白名单时追加一段权限说明（order=86），提醒模型不要在
+ * 没有对应工具时假装完成文件/图片/联网等操作。
  */
 export function buildPersonaPromptSections(
   persona: PersonaPreset | undefined,
@@ -64,6 +69,18 @@ export function buildPersonaPromptSections(
   const personaText = persona?.prompt.trim();
   if (personaText) {
     sections.push({ name: 'qqbot:persona', order: 85, text: personaText });
+  }
+  if (persona?.tools !== undefined) {
+    const tools = [...new Set(persona.tools.map((t) => t.trim()).filter(Boolean))];
+    sections.push({
+      name: 'qqbot:persona-tools',
+      order: PERSONA_TOOLS_ORDER,
+      text: tools.length === 0
+        ? '本会话没有绑定任何工具：你无法读写文件、发送图片/文件、运行命令或联网。'
+          + '遇到这类请求时直接说明做不到，不要声称已经完成。'
+        : `本会话仅绑定了这些工具：${tools.join('、')}。`
+          + '其余工具不可用；超出范围的请求请直接说明做不到，不要假装执行。',
+    });
   }
   return sections;
 }

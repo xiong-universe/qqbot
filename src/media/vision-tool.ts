@@ -9,25 +9,20 @@
  * 手写 ToolDefinition（标准 JSON Schema），避免引入 dsh-tools 的 8 个 peer 依赖。
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import yaml from 'js-yaml';
 import type { Context } from '@deepseek-ai/cordis';
-import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm';
-import type {
-  ContentBlock,
-  FinishReason,
-  GenerateOptions,
-  ImageBlock,
-  StreamChunk,
-} from '@deepseek-ai/dsh-llm';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm';
 import type { VisionConfig } from '../config.ts';
 import type { Logger } from '../types.ts';
-
-/** 通过 dsh-llm 的 ImageBlock 间接引用 dsh-attachment 类型，避免直接依赖 dsh-attachment */
-type ImageAttachmentRef = ImageBlock['attachment'];
-type ImageMediaType = ImageAttachmentRef['mediaType'];
+import { collectStreamText } from '../shared/llm-text.ts';
+import {
+  loadImageBytes,
+  type ImageAttachmentRef,
+  type ImageMediaType,
+} from './image-input.ts';
 
 /** attachments 服务最小接口 */
 interface AttachmentStoreLike {
@@ -61,57 +56,6 @@ const DESCRIPTION =
   + 'instruction (e.g. "transcribe all text", "extract the table as CSV", "translate the text '
   + 'into Chinese") instead of relying on the generic default.';
 
-/** 图片 magic bytes 嗅探 → 标准 MIME（不信声明，安全底线） */
-function sniffImageMediaType(bytes: Uint8Array): ImageMediaType | null {
-  if (bytes.length < 12) return null;
-  // PNG: 89 50 4E 47
-  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
-  // JPEG: FF D8 FF
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  // GIF: 47 49 46 38
-  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif';
-  // WEBP: 52 49 46 46 .. 57 45 42 50
-  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
-    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
-  return null;
-}
-
-/** 加载图片字节（本地路径 / http URL），校验大小 + 嗅探 MIME */
-async function loadImageBytes(
-  image: string,
-  maxBytes: number,
-  signal: AbortSignal,
-): Promise<{ data: Uint8Array; mediaType: ImageMediaType }> {
-  let data: Uint8Array;
-  if (/^https?:\/\//i.test(image)) {
-    const resp = await fetch(image, { signal, redirect: 'error' });
-    if (!resp.ok) throw new Error(`qqbot_describe_image: download failed (HTTP ${resp.status})`);
-    const buf = Buffer.from(await resp.arrayBuffer());
-    if (buf.length > maxBytes) throw new Error(`qqbot_describe_image: image too large (${buf.length} bytes)`);
-    data = new Uint8Array(buf);
-  } else {
-    const info = await stat(image).catch(() => null);
-    if (!info?.isFile()) throw new Error(`qqbot_describe_image: image file not found: ${image}`);
-    if (info.size > maxBytes) throw new Error(`qqbot_describe_image: image too large (${info.size} bytes)`);
-    data = new Uint8Array(await readFile(image));
-  }
-
-  const mediaType = sniffImageMediaType(data);
-  if (mediaType === null) throw new Error('qqbot_describe_image: unrecognized image format (png/jpeg/gif/webp only)');
-  return { data, mediaType };
-}
-
-/** 将终端 finish reason 转成辅助调用失败 */
-function finishError(finish: FinishReason): Error | undefined {
-  switch (finish.kind) {
-    case 'error':
-    case 'aborted':
-      return new Error(finish.failure.message);
-    default:
-      return undefined;
-  }
-}
-
 /** 调视觉模型描述图片，返回纯文本 */
 async function callVision(
   llm: LlmRuntimeLike,
@@ -139,20 +83,7 @@ async function callVision(
     signal,
   };
 
-  const assembler = new BlockAssembler();
-  for await (const chunk of llm.stream(options)) {
-    assembler.push(chunk);
-  }
-  const terminalError = finishError(assembler.finish);
-  if (terminalError !== undefined) throw terminalError;
-
-  const text = assembler.blocks()
-    .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
-    .map((block) => block.text)
-    .join(' ')
-    .trim();
-  if (text.length === 0) throw new Error('qqbot_describe_image: vision model returned no text');
-  return text;
+  return collectStreamText(llm.stream(options), DESCRIBE_IMAGE_TOOL_NAME);
 }
 
 /** 展开 `~`/`~/`/`~\` 前缀 */
@@ -280,7 +211,7 @@ export function registerDescribeImageTool(ctx: Context, vision: VisionConfig, lo
         throw new Error('qqbot_describe_image: `image` must be a non-empty string');
       }
 
-      const loaded = await loadImageBytes(image, vision.maxBytes, exec.signal);
+      const loaded = await loadImageBytes(image, vision.maxBytes, exec.signal, DESCRIBE_IMAGE_TOOL_NAME);
       const ref = await attachments.saveImage({
         data: loaded.data,
         mediaType: loaded.mediaType,

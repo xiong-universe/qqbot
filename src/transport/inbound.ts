@@ -20,6 +20,7 @@ import {
   type MediaKind,
 } from './attachment.ts';
 import { clearGroupHistory } from '../features/history-store.ts';
+import { buildIdentityPrefix } from '../identity/role.ts';
 import type { MiddlewareContext } from '@tencent-connect/qqbot-nodejs';
 
 // ── 类型定义 ──
@@ -105,9 +106,13 @@ export async function handleInbound(
   };
 
   // ── 组装 agentBody（下载结果经 mwState.downloadedFiles 提供） ──
-  const agentBody = assembleAgentBody(msg, mwState, scope, logger);
+  const agentBody = assembleAgentBody(msg, mwState, scope, config, logger);
 
   if (!agentBody) return;
+
+  // 记录互动（长期记忆与关系状态）：与会话生命周期无关，
+  // 先写记忆再 getOrCreate，`/new` 或闲置回收后记忆仍能延续。
+  manager.recordInteraction(scope, peerId, msg.senderId, msg.senderName, msg.content ?? '');
 
   logger.info(`Processing: scope=${scope} peerId=${peerId} body="${agentBody.slice(0, 200)}"`);
 
@@ -161,6 +166,7 @@ function assembleAgentBody(
   msg: ProcessedMessage,
   state: MiddlewareState,
   scope: ChatScope,
+  config: ImQQBotConfig,
   logger: Logger,
 ): string | null {
   const isGroup = scope === 'group';
@@ -171,12 +177,21 @@ function assembleAgentBody(
   if (isEmptyMessage(userContent, msg.attachments, isGroup, wasMentioned)) return null;
 
   const quotePart = buildQuotePart(state.quote);
-  const userMessage = buildUserMessage(userContent, quotePart, msg.senderId, msg.senderName, isGroup, wasMentioned);
+  const identityPrefix = buildIdentityPrefix(msg.senderId, config.identity);
+  const userMessage = buildUserMessage(
+    userContent,
+    quotePart,
+    msg.senderId,
+    msg.senderName,
+    isGroup,
+    wasMentioned,
+    identityPrefix,
+  );
 
   const dynamicCtx = buildDynamicCtx(msg, state);
 
   const base = dynamicCtx ? `${dynamicCtx}${userMessage}` : userMessage;
-  const agentBody = buildAgentBody(base, state.history, isGroup, wasMentioned);
+  const agentBody = buildAgentBody(base, state.history, isGroup, wasMentioned, config);
 
   return agentBody;
 }
@@ -238,6 +253,9 @@ function buildQuotePart(quote?: ResolvedQuote): string {
 
 /**
  * Layer 3: 带发送者标签的用户消息
+ *
+ * 私聊同样带身份标签：QQ 私聊消息不含昵称，只有 `[身份: 主人]` 这类标签
+ * 才能让人格知道对面是谁（旧实现私聊完全不注入 sender 信息）。
  */
 function buildUserMessage(
   userContent: string,
@@ -246,15 +264,16 @@ function buildUserMessage(
   senderName: string | undefined,
   isGroup: boolean,
   wasMentioned: boolean,
+  identityPrefix: string,
 ): string {
   if (!isGroup) {
-    return `${quotePart}${userContent}`;
+    return `${identityPrefix}${quotePart}${userContent}`;
   }
 
   const mentionTag = wasMentioned ? ' (@you)' : '';
   const displayName = senderName ?? shortSenderId(senderId);
   const senderTag = `[${displayName} (${senderId})]`;
-  return `${quotePart}${senderTag} ${userContent}${mentionTag}`;
+  return `${identityPrefix}${quotePart}${senderTag} ${userContent}${mentionTag}`;
 }
 
 /**
@@ -338,12 +357,16 @@ function renderMediaLine(
 
 /**
  * Layer 5: 最终 agentBody 拼合
+ *
+ * 历史消息（群聊上下文）同样带身份标签，避免模型把上一条的主体当成
+ * 当前说话人，也让人格在「上一句是谁说的」时仍能分辨亲疏。
  */
 function buildAgentBody(
   base: string,
   history: HistoryEntry[] | undefined,
   isGroup: boolean,
   wasMentioned: boolean,
+  config: ImQQBotConfig,
 ): string {
   if (!isGroup || !wasMentioned || !history || history.length === 0) {
     return base;
@@ -351,7 +374,8 @@ function buildAgentBody(
 
   const historyLines = history.map(h => {
     const name = h.senderName ?? shortSenderId(h.senderId);
-    return `[${name} (${h.senderId})] ${h.content}`;
+    const identityPrefix = buildIdentityPrefix(h.senderId, config.identity);
+    return `${identityPrefix}[${name} (${h.senderId})] ${h.content}`;
   });
 
   return [

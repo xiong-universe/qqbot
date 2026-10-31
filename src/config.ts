@@ -14,6 +14,37 @@ export interface AccessControlConfig {
   groupAllow: string[];
 }
 
+/**
+ * 身份识别：按当前场景的 openid 判定发送者身份，注入 `[身份: 主人]` 等标签。
+ *
+ * 私聊用 user_openid、群聊用 member_openid，两者不同，需要分别添加。
+ */
+export interface IdentityConfig {
+  /** 是否启用身份识别与标签注入 */
+  enabled: boolean;
+  /** 主人 openid */
+  ownerOpenIds: string[];
+  /** 管理员 openid */
+  adminOpenIds: string[];
+  /** 朋友 openid */
+  friendOpenIds: string[];
+}
+
+/**
+ * 记忆与关系状态：按会话持久化互动次数、关系阶段与要点记忆。
+ *
+ * 数据落在 ~/.dsh-qqbot/memory.json，与会话历史相互独立：
+ * `/new` 清空上下文后记忆仍在，重启后也保留。
+ */
+export interface MemoryConfig {
+  /** 是否启用记忆与关系状态（关闭后不写盘、不注入） */
+  enabled: boolean;
+  /** 是否自动从用户自述中捕获要点（"我叫… / 我喜欢…"） */
+  autoCapture: boolean;
+  /** 每个会话最多保留的记忆条数（超出后淘汰最旧的） */
+  maxNotes: number;
+}
+
 export interface MediaConfig {
   /** 是否启用富媒体理解（图片/视频下载 + 工具分析） */
   enabled: boolean;
@@ -60,6 +91,13 @@ export interface PersonaPreset {
   name: string;
   /** 该人格的 system prompt */
   prompt: string;
+  /**
+   * 该人格可用的工具名白名单（硬约束：运行时限制模型可见的工具）。
+   *
+   * 缺省（不写）表示不限制，继承宿主全部工具；
+   * 配置为空数组表示该人格没有任何工具能力。
+   */
+  tools?: string[];
 }
 
 export interface ImQQBotConfig {
@@ -101,6 +139,10 @@ export interface ImQQBotConfig {
   askTimeoutMs: number;
   /** 群历史缓冲条数 */
   historyLimit: number;
+  /** 身份识别（主人/管理员/朋友/陌生人） */
+  identity: IdentityConfig;
+  /** 记忆与关系状态 */
+  memory: MemoryConfig;
   /** 访问控制 */
   access: AccessControlConfig;
   /** 是否展示工具调用成功结果（工具错误始终展示） */
@@ -115,6 +157,21 @@ export interface ImQQBotConfig {
   sendFile: SendFileConfig;
 }
 
+/** 身份识别子 Schema（独立导出：config 路由的服务端校验复用） */
+export const IdentitySchema: Schema<IdentityConfig> = Schema.object({
+  enabled: Schema.boolean().default(true).description('是否启用身份识别（按 openid 注入身份标签）'),
+  ownerOpenIds: Schema.array(Schema.string()).default([]).description('主人 openid（私聊/群聊需分别添加）'),
+  adminOpenIds: Schema.array(Schema.string()).default([]).description('管理员 openid'),
+  friendOpenIds: Schema.array(Schema.string()).default([]).description('朋友 openid'),
+});
+
+/** 记忆与关系状态子 Schema（独立导出：config 路由的服务端校验复用） */
+export const MemorySchema: Schema<MemoryConfig> = Schema.object({
+  enabled: Schema.boolean().default(true).description('是否启用记忆与关系状态'),
+  autoCapture: Schema.boolean().default(true).description('是否自动捕获用户自述要点'),
+  maxNotes: Schema.number().default(20).description('每个会话最多保留的记忆条数'),
+});
+
 /** 访问控制子 Schema（独立导出：config 路由的服务端校验复用） */
 export const AccessControlSchema: Schema<AccessControlConfig> = Schema.object({
   c2cMode: Schema.union(['open', 'allowlist', 'disabled']).default('allowlist').description('C2C访问模式（默认白名单，空名单拒绝所有人）'),
@@ -128,6 +185,8 @@ export const PersonaPresetSchema: Schema<PersonaPreset> = Schema.object({
   id: Schema.string().description('人格标识（字母/数字/-/_，唯一）'),
   name: Schema.string().description('人格展示名称'),
   prompt: Schema.string().description('该人格的 system prompt'),
+  tools: Schema.array(Schema.string())
+    .description('可用工具白名单（缺省 = 全部工具；空数组 = 无工具）'),
 });
 
 export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
@@ -161,6 +220,17 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
     groupMode: 'open',
     groupAllow: [],
   }).description('访问控制'),
+  identity: IdentitySchema.default({
+    enabled: true,
+    ownerOpenIds: [],
+    adminOpenIds: [],
+    friendOpenIds: [],
+  }).description('身份识别（主人/管理员/朋友/陌生人）'),
+  memory: MemorySchema.default({
+    enabled: true,
+    autoCapture: true,
+    maxNotes: 20,
+  }).description('记忆与关系状态'),
   showToolResults: Schema.boolean().default(false).description('是否展示工具调用成功结果（错误始终展示）'),
   debug: Schema.boolean().default(false),
   media: Schema.object({

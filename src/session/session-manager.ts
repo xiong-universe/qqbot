@@ -28,7 +28,19 @@ import {
   PERSONA_OFF,
   resolvePersonaId,
 } from '../personas/persona-utils.ts';
+import {
+  applyPersonaToolBinding,
+  listToolNames,
+  resolveToolBinding,
+  type ToolsRestrictServiceLike,
+} from '../personas/persona-tools.ts';
 import type { ModelRoute, ModelEntry } from '../model/types.ts';
+import { buildIdentityPromptSection } from '../identity/role.ts';
+import { MemoryStore, type ChatMemory, type MemoryNote } from '../memory/memory-store.ts';
+import {
+  buildMemoryPromptSection,
+  extractMemoryFacts,
+} from '../memory/memory-prompt.ts';
 import { IdleEvictor } from './idle-evictor.ts';
 import type { QuestionChannel } from '../features/question-channel.ts';
 import type { ApprovalChannel } from '../features/approval-channel.ts';
@@ -63,6 +75,9 @@ interface PromptSection {
   order: number;
   text: string;
 }
+
+/** 群聊记忆 note 无昵称时的说话人短标识长度（openid 前 N 位） */
+const SENDER_SHORT_ID_LEN = 8;
 
 /** system-prompt/assemble waterfall 的 context 最小结构 */
 interface AssembleContext {
@@ -101,6 +116,8 @@ export class SessionManager {
   private sessions = new Map<string, SessionRecord>();
   private readonly evictor: IdleEvictor;
   private readonly modelResolver: ModelResolver;
+  /** 长期记忆与关系状态（~/.dsh-qqbot/memory.json） */
+  private readonly memoryStore: MemoryStore;
   private readonly ctx: Context;
   private readonly host: HostAdapter;
   private readonly agents: DshAgentRegistry;
@@ -124,6 +141,7 @@ export class SessionManager {
     this.host = createHostAdapter(ctx, logger);
     this.logger.info(`host adapter capabilities: ${this.host.capabilities.join(', ')}`);
     this.modelResolver = new ModelResolver(ctx, config, logger);
+    this.memoryStore = new MemoryStore({ debugLog: (msg) => logger.debug(msg) });
 
     this.evictor = new IdleEvictor(
       this.sessions,
@@ -132,6 +150,7 @@ export class SessionManager {
         this.logger.info(`evicting idle session: key=${key}`);
         this.sessions.delete(key);
         record.agent.cancel({ kind: 'user' });
+        this.releaseToolBinding(record);
         void record.handle.dispose().catch(() => {});
         // 回收会话时统一清理其待答问题/待批审批，避免 pending 悬挂泄漏
         this.questionChannel?.cancelPending(key);
@@ -163,6 +182,23 @@ export class SessionManager {
 
       const persona = this.getEffectivePersona(record.scope, record.peerId);
       const sections = buildPersonaPromptSections(persona, this.config.globalPrompt);
+      // 身份说明夹在全局提示词与人格之间（order 82）：人格只写称呼与态度，
+      // 不再写死 openid；标签含义统一由这里解释。按 order 插入，不依赖宿主排序。
+      const identitySection = buildIdentityPromptSection(this.config.identity);
+      // 记忆与关系状态（order 87）排在人格之后：模型先知道「自己是谁」，
+      // 再知道「对面是谁、聊过什么」，避免关系描述盖过人格语气。
+      const memorySection = buildMemoryPromptSection(
+        this.memoryStore.get(this.sessionKey(record.scope, record.peerId)),
+        this.config.memory,
+      );
+      const ordered = [identitySection, memorySection].filter(
+        (section): section is PromptSection => section !== undefined,
+      );
+      for (const section of ordered) {
+        const insertAt = sections.findIndex((s) => s.order >= section.order);
+        if (insertAt === -1) sections.push(section);
+        else sections.splice(insertAt, 0, section);
+      }
       if (sections.length === 0) return assembled;
 
       return {
@@ -348,6 +384,7 @@ export class SessionManager {
     const key = this.sessionKey(scope, peerId);
     this.modelResolver.setPersona(key, personaId);
     this.logger.info(`persona switched: key=${key} → ${personaId} (next turn applies)`);
+    this.refreshToolBinding(scope, peerId);
     return true;
   }
 
@@ -355,7 +392,10 @@ export class SessionManager {
   clearPersonaOverride(scope: ChatScope, peerId: string): boolean {
     const key = this.sessionKey(scope, peerId);
     const cleared = this.modelResolver.clearPersona(key);
-    if (cleared) this.logger.info(`persona override cleared: key=${key}`);
+    if (cleared) {
+      this.logger.info(`persona override cleared: key=${key}`);
+      this.refreshToolBinding(scope, peerId);
+    }
     return cleared;
   }
 
@@ -364,6 +404,191 @@ export class SessionManager {
     const key = this.sessionKey(scope, peerId);
     this.modelResolver.setPersona(key, PERSONA_OFF);
     this.logger.info(`persona disabled: key=${key} (next turn applies)`);
+    this.refreshToolBinding(scope, peerId);
+  }
+
+  // ── 人格工具绑定（/tools） ──
+
+  /**
+   * 当前可限制的工具名（`/tools` 展示与白名单校验用）。
+   *
+   * 传入 `agent` 才会带上 preset 挂载的工具（它们是 agent 的祖先层）；
+   * 缺省 agent 只返回宿主全局层，会漏掉 preset 里的工具。
+   */
+  listToolNames(agent?: unknown): string[] {
+    return listToolNames(this.getToolsService(), agent);
+  }
+
+  /** 按会话取工具清单：有活跃会话用它的 agent 作用域，否则退化为全局层视图 */
+  listToolNamesFor(scope: ChatScope, peerId: string): string[] {
+    return this.listToolNames(this.sessions.get(this.sessionKey(scope, peerId))?.agent);
+  }
+
+  /**
+   * 确保会话存在（诊断类命令需要读 agent 作用域时使用）。
+   *
+   * 斜杠命令由中间件直接处理、不经过入站流程，不会自动建会话；没有会话
+   * 就拿不到 agent 作用域，`tools.view()` 只能看到全局层（会漏掉 preset
+   * 挂载的工具）。
+   */
+  async ensureSession(
+    scope: ChatScope,
+    peerId: string,
+    senderId: string,
+    replyTarget: ReplyTarget,
+  ): Promise<void> {
+    if (this.sessions.has(this.sessionKey(scope, peerId))) return;
+    await this.getOrCreate(scope, peerId, senderId, replyTarget);
+  }
+
+  /**
+   * 解析某个会话的人格工具绑定。
+   *
+   * `restricted=false` 表示该人格未配置 `tools`，继承宿主全部工具。
+   */
+  getPersonaToolBinding(scope: ChatScope, peerId: string): {
+    persona: PersonaPreset | undefined;
+    restricted: boolean;
+    allowed: string[];
+    unknown: string[];
+    available: string[];
+  } {
+    const persona = this.getEffectivePersona(scope, peerId);
+    const available = this.listToolNamesFor(scope, peerId);
+    if (persona === undefined || persona.tools === undefined) {
+      return { persona, restricted: false, allowed: available, unknown: [], available };
+    }
+    const { allowed, unknown } = resolveToolBinding(persona.tools, new Set(available));
+    return { persona, restricted: true, allowed, unknown, available };
+  }
+
+  private getToolsService(): ToolsRestrictServiceLike | undefined {
+    try {
+      return this.ctx.get('tools') as ToolsRestrictServiceLike | undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 应用当前生效人格的工具白名单（硬约束）。
+   *
+   * 已应用且人格未变时直接返回；切换人格时先释放旧限制再应用新限制，
+   * 因此 `/persona` 切换无需重建会话即可生效。
+   */
+  private applyToolBinding(record: SessionRecord): void {
+    const persona = this.getEffectivePersona(record.scope, record.peerId);
+    const personaId = persona?.id ?? null;
+    const requested = persona?.tools;
+    const current = record.toolRestriction;
+    if (current !== undefined && current.personaId === personaId) return;
+    // 之前没有任何限制、新人格也不限制：无需记录
+    if (current === undefined && requested === undefined) return;
+
+    current?.dispose?.();
+    record.toolRestriction = undefined;
+
+    if (requested !== undefined) {
+      const dispose = applyPersonaToolBinding(
+        record.agent.ctx,
+        record.agent,
+        requested,
+        personaId ?? '(none)',
+        this.logger,
+      );
+      record.toolRestriction = { personaId, ...(dispose ? { dispose } : {}) };
+      this.logger.info(
+        `tool binding applied: key=${record.sessionKey} persona=${personaId ?? 'none'} requested=${requested.join(',') || '(none)'}`,
+      );
+    } else {
+      // 人格不再限制工具（或关闭人格）：仅记录状态，避免重复释放
+      record.toolRestriction = { personaId };
+      this.logger.info(`tool binding lifted: key=${record.sessionKey} persona=${personaId ?? 'none'}`);
+    }
+  }
+
+  /** 释放会话的工具限制（会话回收/重建/移除前调用） */
+  private releaseToolBinding(record: SessionRecord): void {
+    record.toolRestriction?.dispose?.();
+    record.toolRestriction = undefined;
+  }
+
+  /** 人格切换后立即刷新工具绑定（没有活跃会话时留待创建时应用） */
+  private refreshToolBinding(scope: ChatScope, peerId: string): void {
+    const record = this.sessions.get(this.sessionKey(scope, peerId));
+    if (record) this.applyToolBinding(record);
+  }
+
+  // ── 记忆与关系状态（/memory） ──
+
+  /** 读取指定会话的长期记忆与关系状态 */
+  getChatMemory(scope: ChatScope, peerId: string): ChatMemory | undefined {
+    return this.memoryStore.get(this.sessionKey(scope, peerId));
+  }
+
+  /**
+   * 记录一次用户互动：累加互动次数，并按需自动捕获自述要点。
+   *
+   * 记忆独立于会话历史：`/new` 只换上下文，记忆仍保留；重启后同样保留。
+   */
+  recordInteraction(
+    scope: ChatScope,
+    peerId: string,
+    senderId: string,
+    senderName: string | undefined,
+    text: string,
+  ): void {
+    if (!this.memoryEnabled) return;
+    const key = this.sessionKey(scope, peerId);
+    this.memoryStore.recordInteraction(key, scope, peerId);
+    if (!this.config.memory.autoCapture) return;
+
+    const facts = extractMemoryFacts(text);
+    if (facts.length === 0) return;
+    // 群聊同一会话有多个说话人：note 带说话人前缀，避免把 A 的自述算到 B 头上
+    const prefix = scope === 'group'
+      ? `[${senderName ?? senderId.slice(0, SENDER_SHORT_ID_LEN)}] `
+      : '';
+    for (const fact of facts) {
+      this.memoryStore.addNote(
+        key,
+        scope,
+        peerId,
+        `${prefix}${fact}`,
+        'auto',
+        this.config.memory.maxNotes,
+      );
+    }
+  }
+
+  /** 手动添加一条要点记忆；记忆关闭或内容重复时返回 undefined */
+  addMemoryNote(scope: ChatScope, peerId: string, text: string): MemoryNote | undefined {
+    if (!this.memoryEnabled) return undefined;
+    return this.memoryStore.addNote(
+      this.sessionKey(scope, peerId),
+      scope,
+      peerId,
+      text,
+      'manual',
+      this.config.memory.maxNotes,
+    );
+  }
+
+  /** 删除第 index 条要点记忆（0-based）；越界或记忆关闭时返回 false */
+  removeMemoryNote(scope: ChatScope, peerId: string, index: number): boolean {
+    if (!this.memoryEnabled) return false;
+    return this.memoryStore.removeNote(this.sessionKey(scope, peerId), index);
+  }
+
+  /** 清空当前会话的要点记忆（保留互动次数与关系阶段）；返回删除条数 */
+  clearMemoryNotes(scope: ChatScope, peerId: string): number {
+    if (!this.memoryEnabled) return 0;
+    return this.memoryStore.clearNotes(this.sessionKey(scope, peerId));
+  }
+
+  /** 记忆功能是否开启（关闭时命令与自动捕获都不写盘） */
+  private get memoryEnabled(): boolean {
+    return this.config.memory.enabled;
   }
 
   /**
@@ -386,6 +611,7 @@ export class SessionManager {
       this.logger.warn(`fork unavailable (no completed turn), fallback to dispose: key=${key}`);
       this.sessions.delete(key);
       record.agent.cancel({ kind: 'user' });
+      this.releaseToolBinding(record);
       await record.handle.dispose().catch(() => {});
       return;
     }
@@ -395,6 +621,7 @@ export class SessionManager {
       this.logger.warn(`fork seed unavailable (old host), fallback to dispose: key=${key}`);
       this.sessions.delete(key);
       record.agent.cancel({ kind: 'user' });
+      this.releaseToolBinding(record);
       await record.handle.dispose().catch(() => {});
       return;
     }
@@ -420,11 +647,14 @@ export class SessionManager {
     this.modelResolver.setSessionId(key, childId);
 
     const oldHandle = record.handle;
+    // 旧 agent 的 ctx 会被 dispose，先释放其工具限制，再按当前人格重新应用
+    this.releaseToolBinding(record);
     record.sessionId = childId;
     record.agent = created.agent;
     record.handle = created;
     record.agentPreset = composed.agentPreset;
     record.lastActivity = Date.now();
+    this.applyToolBinding(record);
 
     void oldHandle.dispose().catch(() => {});
     this.logger.info(`session rebuilt via fork: key=${key} preset=${composed.agentPreset ?? 'none'} sessionId=${childId}`);
@@ -642,6 +872,8 @@ export class SessionManager {
     };
 
     this.sessions.set(key, record);
+    // 首次创建/恢复后立即应用人格工具白名单，保证第一轮消息就受约束
+    this.applyToolBinding(record);
     return record;
   }
 
@@ -667,6 +899,7 @@ export class SessionManager {
     if (!record) return;
     this.sessions.delete(key);
     record.agent.cancel({ kind: 'user' });
+    this.releaseToolBinding(record);
     await record.handle.dispose().catch(() => {});
     this.logger.info(`session removed: key=${key}`);
   }
@@ -739,6 +972,7 @@ export class SessionManager {
     this.sessions.clear();
     for (const record of records) {
       record.agent.cancel({ kind: 'user' });
+      this.releaseToolBinding(record);
     }
     await Promise.allSettled(records.map((r) => r.handle.dispose()));
     this.logger.info(`all sessions disposed (count=${records.length})`);

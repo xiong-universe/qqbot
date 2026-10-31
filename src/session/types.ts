@@ -4,8 +4,8 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { ChatScope, ReplyTarget } from '../types.ts';
 
-/** AgentSetup hook 类型 */
-export type AgentSetup = (agentCtx: Context) => Promise<void> | void;
+/** AgentSetup hook 类型（第二个参数为宿主传入的 agent，旧宿主可能不传） */
+export type AgentSetup = (agentCtx: Context, agent?: unknown) => Promise<void> | void;
 
 /** dsh SessionEvent 简化类型（用于统计 token 用量 / 导出） */
 export interface SessionEventLike {
@@ -129,6 +129,12 @@ export interface SessionRecord {
   senderId: string;
   lastActivity: number;
   agentPreset?: string;
+  /** 当前人格工具限制状态（personaId=null 表示关闭人格/未配置） */
+  toolRestriction?: {
+    personaId: string | null;
+    /** restrict 的释放函数；无限制时为 undefined */
+    dispose?: () => void;
+  };
 }
 
 /** 会话状态信息（/status 用） */

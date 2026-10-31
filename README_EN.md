@@ -101,7 +101,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `cwd` | string | `process.cwd()` | Agent working directory |
 | `requireMention` | boolean | `true` | Whether group messages require @bot to trigger |
 | `globalPrompt` | string | `''` | Global system prompt applied to all group/direct chats (put split rules here) |
-| `personas` | array | `[]` | Persona presets (switchable via `/persona` in QQ) |
+| `personas` | array | `[]` | Persona presets (switchable via `/persona` in QQ, each with an optional `tools` whitelist) |
 | `defaultPersona` | string | `''` | Default persona id; empty disables personas |
 | `textChunkLimit` | number | `4500` | Max chars per message |
 | `streaming` | boolean | `true` | Enable streaming output (always disabled in groups) |
@@ -114,6 +114,90 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `askTimeoutMs` | number | `300000` | Question timeout (ms), default 5 min (ask_user_question) |
 | `showToolResults` | boolean | `false` | Show successful tool-call results (errors always shown) |
 | `debug` | boolean | `false` | Debug mode |
+
+### Personas (personas)
+
+Split the single prompt into several switchable personas, each with its own tool whitelist:
+
+```yaml
+- id: im-qqbot
+  config:
+    defaultPersona: assistant
+    personas:
+      - id: assistant
+        name: Assistant
+        prompt: You are a rigorous, concise assistant.
+      - id: chat
+        name: Chat
+        prompt: You are a casual chat partner.
+        tools: []          # pure-chat persona: no tools at all
+      - id: media
+        name: Media helper
+        prompt: You are good at reading images and sending files.
+        tools:
+          - qqbot_describe_image
+          - qqbot_send_file
+```
+
+- `tools` is a **hard** runtime constraint: the persona's agent calls `tools.restrict({ allow })`, so tools outside the whitelist are not even visible to the model (not just discouraged by the prompt).
+  - Omit `tools` to inherit every host tool (default, backwards compatible).
+  - `tools: []` disables all tools for that persona.
+  - Unknown tool names are ignored and logged as warnings.
+  - Switching personas re-applies the binding immediately; `/tools` shows the current binding (admins only).
+- Personas are per-chat (group id / direct-chat user id); `/persona <id>` override > `defaultPersona`.
+- Prompt order: `globalPrompt` (80) → identity (82) → persona prompt (85) → tool-permission note (86, when `tools` is set) → memory (87).
+
+### Identity (identity)
+
+Resolves who sent each message by openid and injects an identity tag so personas can decide how close to be:
+
+```yaml
+- id: im-qqbot
+  config:
+    identity:
+      enabled: true
+      ownerOpenIds:
+        - 8E4BF9DF3A321BC03F55845EE32C623D   # owner (direct chat user_openid)
+      adminOpenIds: []
+      friendOpenIds: []
+```
+
+| Config | Type | Default | Description |
+|------|------|--------|------|
+| `identity.enabled` | boolean | `true` | Enable identity resolution; no tags are injected while all lists are empty |
+| `identity.ownerOpenIds` | string[] | `[]` | Owner openids; persona-specific forms of address only apply to them |
+| `identity.adminOpenIds` | string[] | `[]` | Admin openids |
+| `identity.friendOpenIds` | string[] | `[]` | Friend openids; anyone else is a stranger |
+
+- Each message is prefixed with `[身份: 主人]` (`[Identity: owner]`-style tag), direct chats included. Group history entries carry the tag too.
+- Persona prompts should reference the tag instead of hardcoding an openid — openids change with AppID and differ between direct chats (`user_openid`) and groups (`member_openid`).
+- Send `/whoami` in QQ to read the openid for the current chat; add the direct-chat and group values separately.
+- Identity tags only affect tone and forms of address; they do not bypass `access` allowlists.
+
+### Long-term memory (memory)
+
+Per-chat memory of what was said and how the relationship has progressed, stored separately from session history: `/new` only resets context, memory survives `/new` and restarts (`~/.dsh-qqbot/memory.json`).
+
+```yaml
+- id: im-qqbot
+  config:
+    memory:
+      enabled: true       # disable = no writes, no prompt injection
+      autoCapture: true   # extract facts from user self-descriptions
+      maxNotes: 20        # max notes per chat (oldest evicted)
+```
+
+| Config | Type | Default | Description |
+|------|------|--------|------|
+| `memory.enabled` | boolean | `true` | Enable memory and relationship state; when off, nothing is written or injected |
+| `memory.autoCapture` | boolean | `true` | Auto-capture self-descriptions such as "my name is… / I like…"; no extra model calls |
+| `memory.maxNotes` | number | `20` | Max notes per chat (1–100); oldest notes are evicted |
+
+- Relationship stage is derived from cumulative interactions: 初识 (<5) → 眼熟 (<20) → 熟悉 (<60) → 亲近 (<200) → 很亲近. It only affects familiarity, never the identity rules.
+- Auto-capture is a conservative heuristic: explicit self-descriptions only, skipping questions and hearsay ("he said…").
+- Group notes are prefixed with the speaker's name to avoid attributing one member's facts to another.
+- The injected section contains days known, interaction count, relationship stage and the notes, with instructions to mention them naturally, never recite the list, and never invent unrecorded facts.
+- Manage it with `/memory` in QQ (admins only), or edit the switches and note limit in the "Memory & Relationship" tab of the settings panel.
 
 ### Access control (access)
 
@@ -154,15 +238,22 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 | Command | Description |
 |------|------|
-| `/new` (aliases `/reset` `/clear`) | Start a new session (clear context) |
-| `/compact` | Compact session history (replace old records with a summary) |
-| `/model` | View or switch model |
-| `/preset` | View or switch agent preset (applies to new sessions) |
-| `/stop` | Abort the current generation |
+| `/new` (aliases `/reset` `/clear`) | Start a new session (admins only) |
+| `/compact` | Compact session history (admins only) |
+| `/model` | View or switch model (admins only) |
+| `/preset` | View or switch agent preset (admins only) |
+| `/persona` | List and switch personas per chat (admins only) |
+| `/tools` | Show the current persona's tool binding and host tool list (admins only); `/tools <persona-id>` previews another persona |
+| `/memory` | Show per-chat memory and relationship stage (admins only); `/memory add <text>`, `/memory del <n>`, `/memory clear` |
+| `/whoami` | Show your openid and resolved identity for the current chat |
+| `/stop` | Abort the current generation (admins only, hidden from help) |
 | `/bot-ping` | Network latency test (transport & processing time) |
-| `/bot-version` | View version info |
-| `/bot-status` | View current session status |
-| `/bot-help` | View all commands |
+| `/bot-version` | View version info (model details are admin-only) |
+| `/bot-status` | View current session status (admins only) |
+| `/bot-help` | List commands available to your identity |
+
+> Admin-only commands are hidden from `/bot-help` and rejected with a role message for friends/strangers.
+> When the `identity` lists are empty, permission checks are disabled and everyone keeps full access.
 
 ## Core Modules
 
@@ -192,6 +283,12 @@ src/
 │   ├── model-resolver.ts       # Route resolution
 │   ├── prefs-store.ts          # Per-peer preference persistence
 │   └── settings-reader.ts      # settings.yaml read-only
+├── personas/                   # Persona presets
+│   ├── persona-utils.ts        # Persona resolution + system prompt sections
+│   └── persona-tools.ts        # Tool whitelist → tools.restrict hard constraint
+├── memory/                     # Long-term memory & relationship state
+│   ├── memory-store.ts         # ~/.dsh-qqbot/memory.json persistence
+│   └── memory-prompt.ts        # Relationship stage / fact capture / prompt section (order 87)
 ├── features/                   # Interaction features
 │   ├── question-channel.ts     # ask_user_question Q&A channel
 │   ├── approval-channel.ts     # approval confirmation channel
@@ -225,6 +322,7 @@ Resolution strategy: in-process reuse → persisted resume → fresh create.
 - **Idle eviction** — auto-dispose Agents on timeout to prevent memory leaks
 - **Markdown output** — replies sent as Markdown with code-block/table-aware chunking
 - **Image understanding** — supports `qqbot_describe_image` vision to analyze images sent by users
+- **Problem solving** — supports `qqbot_solve` to solve exam/homework problems (question text or screenshot, using the session's current model) and returns a fixed answer + worked-steps layout
 - **File sending** — supports `qqbot_send_file` to send local files to users (path allowlist enabled by default)
 - **Question interaction** — supports `ask_user_question` with inline keyboard buttons (mutually exclusive) or numbered replies, one question at a time with timeout
 - **Approval confirmation** — supports `approval/request` to ask for user confirmation on critical actions via allow/deny buttons

@@ -9,6 +9,7 @@ export function modelCommand({ manager, config }: CommandDeps): CategorizedComma
     name: 'model',
     category: 'agent',
     description: '查看或切换模型（用法: /model [provider/model]）',
+    minRole: 'admin',
     handler: async (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       const args = (cmdCtx.command?.raw ?? '').trim();

@@ -19,6 +19,7 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
     name: ['persona', '人格'],
     category: 'qqbot',
     description: '查看或切换人格预设（用法: /persona [id|default|off]）',
+    minRole: 'admin',
     handler: async (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       const args = (cmdCtx.command?.raw ?? '').trim();
@@ -47,7 +48,10 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
         for (const p of personas) {
           const mark = p.id === currentId ? '✅ ' : '';
           const show = safeAttr(`${mark}${p.name || p.id}`);
-          lines.push(`<qqbot-cmd-input text="/persona ${p.id}" show="/persona ${show}"/>`);
+          const tools = p.tools === undefined
+            ? '工具: 全部'
+            : p.tools.length === 0 ? '工具: 无' : `工具: ${p.tools.length} 个`;
+          lines.push(`<qqbot-cmd-input text="/persona ${p.id}" show="/persona ${show}"/>　_${tools}_`);
         }
         lines.push(
           '',
@@ -55,7 +59,7 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
           '跟随默认: `/persona default`　关闭人格: `/persona off`',
           '',
           '> 人格按会话隔离：群里切换只影响本群，私聊切换只影响你和机器人的对话。',
-          '> 切换后下一条消息立即生效，无需新建会话。',
+          '> 切换后下一条消息立即生效，工具权限同时切换；查看绑定用 `/tools`。',
         );
 
         await sendMarkdownChunked(cmdCtx, lines.join('\n'), config.textChunkLimit);
@@ -67,14 +71,14 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
         manager.clearPersonaOverride(scope, peerId);
         const current = manager.getEffectivePersona(scope, peerId);
         return current
-          ? `✅ 本会话已恢复默认人格: ${current.name} (${current.id})\n下一条消息生效。`
-          : '✅ 本会话已恢复默认（当前未配置默认人格，人格已关闭）\n下一条消息生效。';
+          ? `✅ 本会话已恢复默认人格: ${current.name} (${current.id})\n工具权限按默认人格重新绑定，下一条消息生效。`
+          : '✅ 本会话已恢复默认（当前未配置默认人格，人格已关闭）\n工具权限恢复为不限制，下一条消息生效。';
       }
 
       // off：仅关闭当前会话的人格
       if (args === 'off') {
         manager.disablePersona(scope, peerId);
-        return '✅ 已关闭本会话人格（群聊/私聊各自独立）\n下一条消息生效，恢复默认用 `/persona default`。';
+        return '✅ 已关闭本会话人格（群聊/私聊各自独立）\n工具权限恢复为不限制，下一条消息生效，恢复默认用 `/persona default`。';
       }
 
       // 切换到指定人格
@@ -85,7 +89,10 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
       }
 
       manager.setPersonaOverride(scope, peerId, persona.id);
-      return `✅ 人格已切换（仅本会话/本群）: ${persona.name} (${persona.id})\n下一条消息生效。`;
+      const tools = persona.tools === undefined
+        ? '工具: 继承全部'
+        : persona.tools.length === 0 ? '工具: 无' : `工具: ${persona.tools.length} 个`;
+      return `✅ 人格已切换（仅本会话/本群）: ${persona.name} (${persona.id})\n${tools}，下一条消息生效。`;
     },
   };
 }

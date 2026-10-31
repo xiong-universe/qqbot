@@ -6,6 +6,67 @@ This file records significant dsh-qqbot updates from a product perspective, focu
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.10.0] - 2026-10-31
+
+### ✨ Added
+
+- **Per-persona tool binding (hard constraint)**: `personas[].tools` declares a tool whitelist per persona and applies it at runtime via `tools.restrict({ allow })`, so tools outside the whitelist are invisible to the model instead of merely discouraged by the prompt. Omit `tools` to inherit every host tool; `tools: []` disables all tools for that persona.
+- **`/tools` command** (alias `/工具`, admins only): shows the current persona's binding (unrestricted / limited to N tools), the allowed and unknown lists, and the host tool list; `/tools <persona-id>` previews any persona.
+- **Applies immediately on switch**: `/persona`, `/persona default` and `/persona off` release the old restriction and re-bind the new persona without `/new`. Restrictions are also released on idle eviction, fork rebuild and session removal.
+- **Tool-permission prompt section** (order 86): when tools are bound, an extra section tells the model which tools exist and to say it cannot do something beyond them instead of pretending.
+- **Settings panel**: each persona card gained a "Restrict tools" switch and a tool-name editor (one per line).
+- **Tabbed settings panel**: configuration is split into six tabs — access, identity, memory, conversation, model & prompts, and personas — showing one section at a time. Tabs with unsaved edits show a dot, and the Save button stays pinned at the bottom.
+- **`qqbot_solve` problem-solving tool**: separates exam/homework solving from chit-chat. Pass `problem` (question text) or `image` (screenshot path or URL); it calls the **session's current model** (`/model` switches apply immediately) and always answers in a fixed "answer / worked steps" layout. Images need the attachments service; text-only questions do not.
+
+### Notes
+
+- Personas without `tools` behave exactly as in 0.9.0, so existing configs are unaffected.
+- Tool names must match host registrations; unknown names are ignored and logged. If the tools service is unavailable, the restriction fails closed to "no tools".
+- Tools registered by an `agentPresets` scope itself are not affected by `restrict` (dsh semantics); this deployment does not mount a preset by default, so the host global tools (including `qqbot_*`) are the ones constrained.
+
+## [0.9.0] - 2026-10-31
+
+### ✨ Added
+
+- **Long-term memory and relationship state (`memory`)**: new `memory.enabled` / `memory.autoCapture` / `memory.maxNotes` config plus a "Memory & Relationship" section in the settings panel. Per-chat interaction counts, relationship stage and notes are stored in `~/.dsh-qqbot/memory.json`, separate from session history: `/new` only resets context, and memory survives restarts.
+- **Automatic fact capture**: extracts long-term facts from explicit self-descriptions such as "my name is… / I like… / I live in…", with no extra model calls. Questions and hearsay ("he said…") are skipped — better to record less than to record wrong. Group notes are prefixed with the speaker to avoid attributing one member's facts to another.
+- **Memory injection**: each system prompt now includes a memory section (order 87) with days known, interaction count, relationship stage and notes, instructing the model to mention them only when relevant, never recite the list, and never invent unrecorded facts.
+- **`/memory` command** (alias `/记忆`): shows per-chat memory and relationship stage (admins only), with `/memory add <text>`, `/memory del <n>` and `/memory clear`.
+
+### Notes
+
+- Enabled by default (`enabled: true` / `autoCapture: true` / `maxNotes: 20`); no profile change needed.
+- Relationship stage: 初识 (<5) → 眼熟 (<20) → 熟悉 (<60) → 亲近 (<200) → 很亲近. It only affects familiarity, never identity resolution.
+- With `memory.enabled: false`, nothing is written or injected and behavior matches 0.8.x.
+
+## [0.8.2] - 2026-10-31
+
+### ✨ Added
+
+- **Command permissions**: commands can declare a minimum role (`minRole`), wrapped into the SDK `authorized` hook by `commands/index.ts`. Friends/strangers get a role-aware rejection message when calling admin commands.
+- **Admin-only commands**: `/new`, `/compact`, `/model`, `/preset`, `/persona`, `/bot-status`, `/stop`.
+- **Slimmer menu**: `/bot-help` filters by caller identity; friends/strangers only see `/whoami`, `/bot-ping`, `/bot-version`, `/bot-help`, and no model/preset/session details.
+- **Tiered `/bot-version`**: non-admins only get the version string, without the current model.
+
+### Notes
+
+- Permission checks share the `identity` lists. If all three lists are empty, permission control is disabled and everyone keeps the previous access.
+- With no identity lists configured, behavior is identical to 0.8.1.
+
+## [0.8.1] - 2026-10-31
+
+### ✨ Added
+
+- **Identity resolution (`identity`)**: new `identity.ownerOpenIds` / `identity.adminOpenIds` / `identity.friendOpenIds` config plus an "Identity" section in the settings panel. The plugin resolves each sender by the openid of the current chat and prefixes messages with `[身份: 主人]` / `[身份: 管理员]` / `[身份: 朋友]` / `[身份: 陌生人]` tags. Direct chats now carry the tag too (previously no sender info at all), and group history entries are tagged as well.
+- **Personas no longer hardcode openids**: personas only key off the `身份: 主人` tag, so changing the AppID or switching between direct chats and groups no longer breaks the owner check.
+- **`/whoami` command** (alias `/我是谁`): echoes the openid of the current chat and the resolved role so owners/friends can be added easily.
+
+### Notes
+
+- No tags are injected while all three lists are empty, so message formatting stays identical to previous versions; set `identity.enabled: false` to turn it off entirely.
+- Direct chats use `user_openid` and groups use `member_openid`; the same account needs to be added to both.
+- Identity tags only affect tone and familiarity; they do not bypass `access` allowlists.
+
 ## [0.8.0] - 2026-10-30
 
 ### ⚠️ Breaking changes

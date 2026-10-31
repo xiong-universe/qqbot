@@ -10,6 +10,7 @@ export function statusCommand({ manager }: CommandDeps): CategorizedCommand {
     name: 'bot-status',
     category: 'qqbot',
     description: '查看当前会话状态',
+    minRole: 'admin',
     handler: (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       const status = manager.getStatus(scope, peerId);

@@ -3,6 +3,7 @@ import {
   buildPersonaPromptSections,
   findPersona,
   PERSONA_OFF,
+  PERSONA_TOOLS_ORDER,
   resolvePersonaId,
 } from './persona-utils.ts';
 import type { PersonaPreset } from '../config.ts';
@@ -69,5 +70,46 @@ describe('buildPersonaPromptSections', () => {
 
   it('空白 prompt 不产生 section', () => {
     expect(buildPersonaPromptSections({ id: 'x', name: 'x', prompt: '  ' }, '  ')).toEqual([]);
+  });
+
+  it('配置了工具白名单时追加 order 86 权限说明', () => {
+    const persona: PersonaPreset = {
+      id: 'p3',
+      name: '助手',
+      prompt: '你是助手。',
+      tools: ['qqbot_send_file', 'qqbot_send_file', ' qqbot_describe_image '],
+    };
+    const sections = buildPersonaPromptSections(persona, '全局规则');
+    expect(sections).toEqual([
+      { name: 'qqbot:global-prompt', order: 80, text: '全局规则' },
+      { name: 'qqbot:persona', order: 85, text: '你是助手。' },
+      {
+        name: 'qqbot:persona-tools',
+        order: PERSONA_TOOLS_ORDER,
+        text: '本会话仅绑定了这些工具：qqbot_send_file、qqbot_describe_image。'
+          + '其余工具不可用；超出范围的请求请直接说明做不到，不要假装执行。',
+      },
+    ]);
+  });
+
+  it('空工具数组成「没有工具」的说明', () => {
+    const sections = buildPersonaPromptSections(
+      { id: 'p4', name: '纯聊天', prompt: '你只聊天。', tools: [] },
+      '',
+    );
+    expect(sections).toEqual([
+      { name: 'qqbot:persona', order: 85, text: '你只聊天。' },
+      {
+        name: 'qqbot:persona-tools',
+        order: PERSONA_TOOLS_ORDER,
+        text: '本会话没有绑定任何工具：你无法读写文件、发送图片/文件、运行命令或联网。'
+          + '遇到这类请求时直接说明做不到，不要声称已经完成。',
+      },
+    ]);
+  });
+
+  it('未配置 tools（undefined）不产生权限说明', () => {
+    const sections = buildPersonaPromptSections({ id: 'p5', name: 'x', prompt: '你好。' }, '');
+    expect(sections.map((s) => s.name)).toEqual(['qqbot:persona']);
   });
 });

@@ -397,6 +397,54 @@ describe('bind-routes', () => {
     expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('重复') });
   });
 
+  it('POST config：人格工具白名单去空/去重后原样保存', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"cat","name":"猫娘","prompt":"","tools":[" read ","","read","qqbot_send_file"]},'
+        + '{"id":"plain","name":"纯聊","prompt":"","tools":[]}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toEqual({
+      personas: [
+        { id: 'cat', name: '猫娘', prompt: '', tools: ['read', 'qqbot_send_file'] },
+        { id: 'plain', name: '纯聊', prompt: '', tools: [] },
+      ],
+    });
+  });
+
+  it('POST config：人格工具名非法字符被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"cat","name":"猫娘","prompt":"","tools":["bad name!"]}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('非法工具名') });
+  });
+
+  it('POST config：人格工具白名单类型错误被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"cat","name":"猫娘","prompt":"","tools":"read"}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('必须是数组') });
+  });
+
   it('POST config：全局提示词与拆分模式通过校验并原样保存', async () => {
     let saved: Record<string, unknown> | undefined;
     const { routes } = createHarness({

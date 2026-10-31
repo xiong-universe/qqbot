@@ -11,6 +11,7 @@ export function presetCommand({ manager, config }: CommandDeps): CategorizedComm
     name: 'preset',
     category: 'agent',
     description: '查看或切换 agent preset（用法: /preset [id]）',
+    minRole: 'admin',
     handler: async (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       const args = (cmdCtx.command?.raw ?? '').trim();

@@ -15,6 +15,7 @@ export function newCommand({ manager }: CommandDeps): CategorizedCommand {
     name: ['new', 'reset', 'clear'],
     category: 'agent',
     description: '开始新会话（清空上下文）',
+    minRole: 'admin',
     handler: (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       void manager.remove(scope, peerId);
@@ -29,6 +30,7 @@ export function compactCommand({ manager }: CommandDeps): CategorizedCommand {
     name: 'compact',
     category: 'agent',
     description: '压缩会话历史（摘要替换旧记录，保留上下文）',
+    minRole: 'admin',
     handler: async (cmdCtx) => {
       const { scope, peerId } = getScopePeer(cmdCtx);
       const msg = cmdCtx.message;

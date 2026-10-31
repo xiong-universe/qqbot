@@ -2,6 +2,8 @@
  * QQ 机器人配置面板 — 必要配置的 UI 编辑
  *
  * UI 复刻 DSW 通用设置（settings-form 原语）的视觉风格：
+ * 配置按「服务 / 身份 / 记忆 / 对话 / 模型 / 人格」六个分区呈现，
+ * 一次只渲染一个分区，避免单列过长；每个分区有未保存修改时 tab 显示小圆点。
  * 左对齐设置列、0.5px 行分隔、label 13px/500、控件右置；
  * Switch 为 36×20 aria-checked 结构（thumb translateX 动画）；
  * 三值选择用分段控件（滑动指示器按段数/索引的 CSS 变量定位）；
@@ -25,11 +27,28 @@ interface AccessControlWire {
   groupAllow: string[];
 }
 
+/** 身份识别配置（与 src/config.ts 的 IdentityConfig 对应的局部投影） */
+interface IdentityWire {
+  enabled: boolean;
+  ownerOpenIds: string[];
+  adminOpenIds: string[];
+  friendOpenIds: string[];
+}
+
+/** 记忆与关系状态配置（与 src/config.ts 的 MemoryConfig 对应的局部投影） */
+interface MemoryWire {
+  enabled: boolean;
+  autoCapture: boolean;
+  maxNotes: number;
+}
+
 /** 人格预设（与 src/config.ts 的 PersonaPreset 对应的局部投影） */
 interface PersonaWire {
   id: string;
   name: string;
   prompt: string;
+  /** 工具白名单；undefined = 不限制（继承全部工具） */
+  tools?: string[];
 }
 
 /** GET 回显的生效配置（appSecret 已剔除） */
@@ -48,20 +67,28 @@ type ConfigWire = {
   globalPrompt?: string;
   personas?: PersonaWire[];
   defaultPersona?: string;
+  identity?: IdentityWire;
+  memory?: MemoryWire;
   access?: AccessControlWire;
   cwd?: string;
 };
 
-/** 样式注入标记（幂等） */
+/** 样式注入标记（幂等；版本变化时替换旧样式，避免客户端热更新后仍用旧样式） */
 const STYLE_ID = 'im-qqbot-config-panel-styles';
+const STYLE_VERSION = '2';
 
 /** DSW 通用设置风格（settings-form / Switch / SegmentedControl 原语复刻） */
 function useConfigPanelStyles(): void {
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    if (document.getElementById(STYLE_ID) !== null) return;
+    const existing = document.getElementById(STYLE_ID);
+    if (existing !== null) {
+      if (existing.getAttribute('data-version') === STYLE_VERSION) return;
+      existing.remove();
+    }
     const style = document.createElement('style');
     style.id = STYLE_ID;
+    style.setAttribute('data-version', STYLE_VERSION);
     style.textContent = `
 .imqb2-form { display: flex; flex-direction: column; width: 100%; }
 .imqb2-group-title {
@@ -179,6 +206,33 @@ function useConfigPanelStyles(): void {
   color: var(--dsw-alias-label-secondary);
 }
 .imqb2-persona-add:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+/* 分区 tab 栏（自动换行，选中态为浮起胶囊） */
+.imqb2-tabs {
+  display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; margin: 2px 0 4px;
+  border-radius: var(--dsw-radius-md, 8px);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.imqb2-tab {
+  appearance: none; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;
+  height: 28px; padding: 0 10px; border: 0; border-radius: var(--dsw-radius-sm, 6px);
+  background: transparent; font: inherit; font-size: 13px; line-height: 20px;
+  font-weight: 500; color: var(--dsw-alias-label-secondary); white-space: nowrap; cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.imqb2-tab:hover, .imqb2-tab[aria-selected='true'] { color: var(--dsw-alias-label-primary); }
+.imqb2-tab[aria-selected='true'] {
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-soft, 0 1px 3px rgba(0,0,0,.08));
+}
+.imqb2-tab:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+.imqb2-tab-dot {
+  flex: none; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--dsw-alias-state-business-primary);
+}
+.imqb2-tabpanel { display: flex; flex-direction: column; padding-top: 2px; }
 /* 底栏（官方 SettingsForm.footer 复刻） */
 .imqb2-footer { display: flex; align-items: center; gap: 8px; padding-top: 16px; }
 .imqb2-note { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
@@ -310,7 +364,11 @@ function PersonaCard({ index, value, expanded, onChange, onToggle, onRemove }: {
           className: 'imqb2-persona-arrow', 'data-expanded': expanded,
         }, '▶'),
         createElement('span', { className: 'imqb2-persona-title' }, title),
-        createElement('span', { className: 'imqb2-persona-sub' }, value.id.trim()),
+        createElement('span', { className: 'imqb2-persona-sub' },
+          value.tools === undefined
+            ? value.id.trim()
+            : `${value.id.trim()} · 工具 ${value.tools.filter((t) => t.trim()).length}`,
+        ),
       ),
       createElement('button', {
         type: 'button', className: 'imqb2-persona-remove',
@@ -334,6 +392,27 @@ function PersonaCard({ index, value, expanded, onChange, onToggle, onRemove }: {
             placeholder: '该人格的 system prompt（只写角色设定/说话风格）',
             onChange: (event: ChangeEvent<HTMLTextAreaElement>) => { onChange({ prompt: event.currentTarget.value }); },
           }),
+          createElement('div', { className: 'imqb2-head' },
+            createElement('span', { className: 'imqb2-label' }, '限制可用工具'),
+            createElement(Switch, {
+              checked: value.tools !== undefined,
+              label: '限制可用工具',
+              onChange: (checked) => { onChange({ tools: checked ? [] : undefined }); },
+            }),
+          ),
+          value.tools === undefined
+            ? createElement('p', { className: 'imqb2-hint' },
+                '关闭时继承宿主全部工具；开启后模型只能看到下面列出的工具（硬约束，不是提示词）。')
+            : createElement('textarea', {
+                className: 'imqb2-input imqb2-textarea',
+                value: value.tools.join('\n'), rows: 3,
+                placeholder: '每行一个工具名，例如:\nqqbot_send_file\nqqbot_describe_image\n\n留空 = 禁用该人格的全部工具',
+                onChange: (event: ChangeEvent<HTMLTextAreaElement>) => {
+                  onChange({ tools: event.currentTarget.value.split('\n') });
+                },
+              }),
+          createElement('p', { className: 'imqb2-hint' },
+            '工具名可在 QQ 端用 `/tools` 查看（仅管理员）；未注册的名字会被忽略并在日志中告警。'),
         )
       : null,
   );
@@ -352,6 +431,28 @@ const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
   { value: 'delimiter', label: '约定分隔符' },
   { value: 'line', label: '每个换行' },
   { value: 'paragraph', label: '按空行' },
+];
+
+/** 配置分区：每页只展示一组相关配置，避免单列过长 */
+type TabId = 'access' | 'identity' | 'memory' | 'conversation' | 'model' | 'personas';
+
+interface TabDef {
+  id: TabId;
+  label: string;
+  /** 该分区包含的配置键（用于在 tab 上显示「未保存」小圆点） */
+  keys: ReadonlyArray<keyof ConfigWire>;
+}
+
+const TABS: ReadonlyArray<TabDef> = [
+  { id: 'access', label: '服务范围', keys: ['access'] },
+  { id: 'identity', label: '身份与权限', keys: ['identity'] },
+  { id: 'memory', label: '记忆与关系', keys: ['memory'] },
+  {
+    id: 'conversation', label: '对话设置',
+    keys: ['requireMention', 'streaming', 'replySplitMode', 'replySplitIntervalMs', 'showToolResults'],
+  },
+  { id: 'model', label: '模型与提示词', keys: ['provider', 'model', 'preset', 'globalPrompt'] },
+  { id: 'personas', label: '人格预设', keys: ['personas', 'defaultPersona'] },
 ];
 
 /** 深比较（表单值与初始回显值的 dirty 判断） */
@@ -374,6 +475,8 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const [loadError, setLoadError] = useState<string | null>(null);
   // 人格抽屉展开状态（按索引记录；默认全部收起）
   const [expandedPersonas, setExpandedPersonas] = useState<Set<number>>(() => new Set());
+  // 当前配置分区（默认落在最常用的「服务范围」）
+  const [activeTab, setActiveTab] = useState<TabId>('access');
   // 绑定相位变化时重拉配置（扫码落库的白名单等新值）
   const bindPhase = props?.bindPhase;
 
@@ -419,16 +522,42 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       };
     }
 
+    // 身份名单：提交时裁剪空白与空行，保留原始大小写
+    if (changed.identity !== undefined) {
+      const i = changed.identity as IdentityWire;
+      const clean = (list: string[]): string[] => list.map((s) => s.trim()).filter(Boolean);
+      changed.identity = {
+        enabled: i.enabled !== false,
+        ownerOpenIds: clean(i.ownerOpenIds),
+        adminOpenIds: clean(i.adminOpenIds),
+        friendOpenIds: clean(i.friendOpenIds),
+      };
+    }
+
     // 人格预设：提交时裁剪 id/名称，prompt 保留原文（换行有意义）
     if (changed.personas !== undefined) {
       changed.personas = (changed.personas as PersonaWire[]).map((p) => ({
         id: p.id.trim(),
         name: p.name.trim(),
         prompt: p.prompt,
+        ...(p.tools !== undefined
+          ? { tools: [...new Set(p.tools.map((t) => t.trim()).filter(Boolean))] }
+          : {}),
       }));
     }
     if (changed.defaultPersona !== undefined) {
       changed.defaultPersona = String(changed.defaultPersona).trim();
+    }
+
+    // 记忆配置：maxNotes 收敛到 1–100 的整数
+    if (changed.memory !== undefined) {
+      const m = changed.memory as MemoryWire;
+      const n = Math.round(Number(m.maxNotes));
+      changed.memory = {
+        enabled: m.enabled !== false,
+        autoCapture: m.autoCapture !== false,
+        maxNotes: Number.isFinite(n) ? Math.min(100, Math.max(1, n)) : 20,
+      };
     }
 
     setBusy(true);
@@ -460,8 +589,14 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     return createElement('p', { className: 'imqb2-hint', style: { padding: '12px 0' } }, '正在加载配置…');
   }
 
-  const dirty = (Object.keys(form) as Array<keyof ConfigWire>).some((key) => !shallowEqual(form[key], initial[key]));
+  const changedKeys = (Object.keys(form) as Array<keyof ConfigWire>)
+    .filter((key) => !shallowEqual(form[key], initial[key]));
+  const dirty = changedKeys.length > 0;
   const access: AccessControlWire = form.access ?? { c2cMode: 'allowlist', c2cAllow: [], groupMode: 'open', groupAllow: [] };
+  const identity: IdentityWire = form.identity
+    ?? { enabled: true, ownerOpenIds: [], adminOpenIds: [], friendOpenIds: [] };
+  const memory: MemoryWire = form.memory
+    ?? { enabled: true, autoCapture: true, maxNotes: 20 };
   const personas = form.personas ?? [];
 
   const updatePersona = (index: number, next: Partial<PersonaWire>): void => {
@@ -514,8 +649,10 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }
   };
 
-  return createElement('form', { className: 'imqb2-form', onSubmit: submit },
-    createElement('div', { className: 'imqb2-group-title' }, '服务范围'),
+  const tabDirty = (tab: TabDef): boolean => tab.keys.some((key) => changedKeys.includes(key));
+
+  // 各分区内容：只渲染当前 tab，表单值始终保存在 form 中，切换不会丢失编辑
+  const accessPanel: ReactNode[] = [
     createElement(SegmentedRow, {
       label: '私聊', value: access.c2cMode, options: MODE_OPTIONS,
       onChange: (v) => { patch('access', { ...access, c2cMode: v as AccessMode }); },
@@ -538,8 +675,72 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
           onChange: (v) => { patch('access', { ...access, groupAllow: v.split('\n').map((s) => s.trim()) }); },
         })
       : null,
+    createElement('p', { className: 'imqb2-hint', style: { padding: '8px 0 0' } },
+      'openid 可在 QQ 里对机器人发送 /whoami 查看；私聊与群聊是两套值。'),
+  ];
 
-    createElement('div', { className: 'imqb2-group-title' }, '基础设置'),
+  const identityPanel: ReactNode[] = [
+    createElement(SwitchRow, {
+      label: '身份识别', checked: identity.enabled,
+      help: '按 openid 判定发送者身份，并在消息前注入 [身份: 主人 / 管理员 / 朋友 / 陌生人]；三份名单都为空时不注入，保持旧行为',
+      onChange: (v) => { patch('identity', { ...identity, enabled: v }); },
+    }),
+    identity.enabled
+      ? createElement('p', { className: 'imqb2-hint', style: { padding: '0 0 8px' } },
+          '在 QQ 里对机器人发送 /whoami 可查看并复制自己的 openid。私聊（user_openid）与群聊（member_openid）是两套值，需要分别添加。')
+      : null,
+    identity.enabled
+      ? createElement(AreaRow, {
+          label: '主人 openid', rows: 2,
+          help: '对应「身份: 主人」，人格里的专属称呼只对这些人生效；一行一个',
+          value: identity.ownerOpenIds.join('\n'),
+          onChange: (v) => { patch('identity', { ...identity, ownerOpenIds: v.split('\n').map((s) => s.trim()) }); },
+        })
+      : null,
+    identity.enabled
+      ? createElement(AreaRow, {
+          label: '管理员 openid', rows: 2,
+          help: '对应「身份: 管理员」，按熟人对待但不套用主人设定；一行一个',
+          value: identity.adminOpenIds.join('\n'),
+          onChange: (v) => { patch('identity', { ...identity, adminOpenIds: v.split('\n').map((s) => s.trim()) }); },
+        })
+      : null,
+    identity.enabled
+      ? createElement(AreaRow, {
+          label: '朋友 openid', rows: 2,
+          help: '对应「身份: 朋友」，其余未命中名单的人都是「陌生人」；一行一个',
+          value: identity.friendOpenIds.join('\n'),
+          onChange: (v) => { patch('identity', { ...identity, friendOpenIds: v.split('\n').map((s) => s.trim()) }); },
+        })
+      : null,
+  ];
+
+  const memoryPanel: ReactNode[] = [
+    createElement(SwitchRow, {
+      label: '长期记忆', checked: memory.enabled,
+      help: '按会话保存互动次数、关系阶段与要点记忆（~/.dsh-qqbot/memory.json）；/new 只重置上下文，记忆与重启后都会保留',
+      onChange: (v) => { patch('memory', { ...memory, enabled: v }); },
+    }),
+    memory.enabled
+      ? createElement(SwitchRow, {
+          label: '自动捕获要点', checked: memory.autoCapture,
+          help: '从「我叫… / 我喜欢… / 我住在…」这类自述里自动提取要点，不额外调用模型；只说疑问句或转述他人时不会记录',
+          onChange: (v) => { patch('memory', { ...memory, autoCapture: v }); },
+        })
+      : null,
+    memory.enabled
+      ? createElement(FieldRow, {
+          label: '每个会话最多记忆条数', value: String(memory.maxNotes), placeholder: '20',
+          help: '超出后淘汰最旧的要点（1–100）；QQ 端可用 /memory 查看、手动添加或删除',
+          onChange: (v) => {
+            const n = Math.round(Number(v));
+            patch('memory', { ...memory, maxNotes: Number.isFinite(n) ? Math.min(100, Math.max(1, n)) : 20 });
+          },
+        })
+      : null,
+  ];
+
+  const conversationPanel: ReactNode[] = [
     createElement(SwitchRow, {
       label: '群聊仅回复 @机器人的消息', checked: form.requireMention ?? true,
       help: '开启后，机器人仅可回复 @机器人的群聊消息',
@@ -558,7 +759,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     form.replySplitMode === 'delimiter'
       ? createElement('p', {
           className: 'imqb2-hint', style: { padding: '0 0 8px' },
-        }, '分隔符固定为 |||（不可配置）；拆条规则写在下方「全局提示词」里即可对整个机器人生效')
+        }, '分隔符固定为 |||（不可配置）；拆条规则写在「模型与提示词」的「全局提示词」里即可对整个机器人生效')
       : null,
     form.replySplitMode !== undefined && form.replySplitMode !== 'none'
       ? createElement(FieldRow, {
@@ -576,7 +777,9 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       help: '在聊天中展示 agent 工具调用的结构化结果',
       onChange: (v) => { patch('showToolResults', v); },
     }),
+  ];
 
+  const modelPanel: ReactNode[] = [
     createElement('div', { className: 'imqb2-group-title' }, '模型'),
     createElement(FieldRow, {
       label: 'Provider', value: form.provider ?? '', placeholder: '留空继承宿主默认',
@@ -590,7 +793,15 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       label: 'Preset', value: form.preset ?? '', placeholder: 'Agent preset id',
       onChange: (v) => { patch('preset', v); },
     }),
-
+    form.cwd !== undefined
+      ? createElement('div', { className: 'imqb2-field' },
+          createElement('div', { className: 'imqb2-head' },
+            createElement('span', { className: 'imqb2-label' }, 'Agent 工作目录'),
+            createElement('span', { className: 'imqb2-hint' }, '只读'),
+          ),
+          createElement('p', { className: 'imqb2-readonly' }, form.cwd),
+        )
+      : null,
     createElement('div', { className: 'imqb2-group-title' }, '全局提示词'),
     createElement(AreaRow, {
       label: '全局 system prompt', rows: 6,
@@ -598,10 +809,11 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       value: form.globalPrompt ?? '',
       onChange: (v) => { patch('globalPrompt', v); },
     }),
+  ];
 
-    createElement('div', { className: 'imqb2-group-title' }, '人格预设'),
+  const personasPanel: ReactNode[] = [
     createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 8px' } },
-      '每个人格是一套角色 system prompt，叠加在全局提示词之上。点击标题展开编辑，配置后可在 QQ 聊天发送 /persona（或直接点击菜单）按会话切换。'),
+      '每个人格是一套角色 system prompt，叠加在全局提示词之上。点击标题展开编辑，配置后可在 QQ 聊天发送 /persona（或直接点击菜单）按会话切换；修改过但未保存的分区会在 tab 上显示小圆点。'),
     personas.length === 0
       ? createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 12px' } },
           '尚未添加人格。添加并保存后，QQ 端 /persona 即可看到切换菜单。')
@@ -626,16 +838,39 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
           onChange: (v) => { patch('defaultPersona', v); },
         })
       : null,
+  ];
 
-    form.cwd !== undefined
-      ? createElement('div', { className: 'imqb2-field' },
-          createElement('div', { className: 'imqb2-head' },
-            createElement('span', { className: 'imqb2-label' }, 'Agent 工作目录'),
-            createElement('span', { className: 'imqb2-hint' }, '只读'),
-          ),
-          createElement('p', { className: 'imqb2-readonly' }, form.cwd),
-        )
-      : null,
+  const panels: Record<TabId, ReactNode[]> = {
+    access: accessPanel,
+    identity: identityPanel,
+    memory: memoryPanel,
+    conversation: conversationPanel,
+    model: modelPanel,
+    personas: personasPanel,
+  };
+  const activeTabLabel = TABS.find((tab) => tab.id === activeTab)?.label ?? '';
+
+  return createElement('form', { className: 'imqb2-form', onSubmit: submit },
+    createElement('div', {
+      className: 'imqb2-tabs', role: 'tablist', 'aria-label': '配置分区',
+    },
+      TABS.map((tab) => createElement('button', {
+        key: tab.id, type: 'button', role: 'tab',
+        'aria-selected': activeTab === tab.id,
+        'aria-controls': 'imqb2-config-tabpanel',
+        className: 'imqb2-tab',
+        onClick: () => { setActiveTab(tab.id); },
+      },
+        tab.label,
+        tabDirty(tab)
+          ? createElement('span', { className: 'imqb2-tab-dot', title: '有未保存的修改' })
+          : null,
+      )),
+    ),
+    createElement('div', {
+      id: 'imqb2-config-tabpanel',
+      className: 'imqb2-tabpanel', role: 'tabpanel', 'aria-label': activeTabLabel,
+    }, panels[activeTab]),
 
     createElement('div', { className: 'imqb2-footer' },
       result !== null

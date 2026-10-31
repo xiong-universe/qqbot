@@ -114,7 +114,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `cwd` | string | `process.cwd()` | Agent 工作目录 |
 | `requireMention` | boolean | `true` | 群聊是否需要 @bot 才触发 |
 | `globalPrompt` | string | `''` | 全局 system prompt：对所有群聊/私聊生效（多条消息拆分规则建议写在这里） |
-| `personas` | array | `[]` | 人格预设列表（QQ 端 `/persona` 切换），见下文 |
+| `personas` | array | `[]` | 人格预设列表（QQ 端 `/persona` 切换，可配置 `tools` 工具白名单），见下文 |
 | `defaultPersona` | string | `''` | 默认人格 id，留空表示不启用人格 |
 | `textChunkLimit` | number | `4500` | 单条消息最大字符数 |
 | `streaming` | boolean | `true` | 是否启用流式输出（群聊始终不启用） |
@@ -160,15 +160,80 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
       - id: catgirl
         name: 猫娘
         prompt: 你是一只可爱的猫娘，句尾带「喵」。
+        tools: []          # 纯聊天人格：不绑定任何工具
+      - id: media
+        name: 看图助手
+        prompt: 你擅长看图和发文件。
+        tools:
+          - qqbot_describe_image
+          - qqbot_send_file
 ```
 
-- `id`：字母/数字/`-`/`_`，1–64 位，列表内唯一；`name` 是 QQ 菜单展示名；`prompt` 是该人格的 system prompt。
+- `id`：字母/数字/`-`/`_`，1–64 位，列表内唯一；`name` 是 QQ 菜单展示名；`prompt` 是该人格的 system prompt；`tools` 是该人格可用的工具白名单。
+- **工具权限是硬约束，不是提示词**：配置了 `tools` 的人格会在运行时通过 `tools.restrict({ allow })` 限制模型可见的工具，白名单之外的工具模型根本看不到、调不到。
+  - 不写 `tools`（缺省）：继承宿主全部工具，行为与旧版本一致。
+  - `tools: []`：该人格没有任何工具能力（不能读写文件、发图/发文件、运行命令、联网）。
+  - 工具名需与宿主注册名一致（如 `qqbot_send_file`、`qqbot_describe_image`、`read`、`bash`）；未注册的名字会被忽略并在日志里告警。
+  - 切换人格后工具权限**立即重新绑定**，无需 `/new`；`/tools` 可查看当前人格的绑定（仅管理员）。
 - **人格按会话隔离**：群聊按群 ID、私聊按用户 ID 分别记录，同一个群里切人格不会影响其他群或其他私聊。
 - 生效优先级：本会话 `/persona <id>` 选择 > `defaultPersona`；都没有则不启用人格（仅保留 `globalPrompt`）。
-- 注入顺序：`globalPrompt`（order 80）→ 人格 prompt（order 85）；人格只描述「是谁」，拆条等通用规则统一写在 `globalPrompt`。
+- 注入顺序：`globalPrompt`（order 80）→ 身份说明（order 82，配置了 `identity` 时）→ 人格 prompt（order 85）→ 工具权限说明（order 86，配置了 `tools` 时）→ 记忆与关系（order 87，开启 `memory` 时）；人格只描述「是谁」，拆条等通用规则统一写在 `globalPrompt`。
 - 人格在每次构建 system prompt 时注入，切换后**下一条消息**即生效，无需 `/new`。
 - 多条消息统一用固定分隔符 `|||`，并配合 `replySplitMode: delimiter`；人格 prompt 里无需重复约定。
-- 也可以在 dsh 设置面板的「人格预设」区块里增删改（卡片默认收起，点击展开编辑），保存后自动重载。
+- 也可以在 dsh 设置面板的「人格预设」页签里增删改（卡片默认收起，点击展开编辑），保存后自动重载。
+
+### 身份与权限（identity）
+
+按 openid 判定「这条消息是谁发的」，并在消息前注入身份标签，人格据此决定称呼与亲疏：
+
+```yaml
+- id: im-qqbot
+  config:
+    identity:
+      enabled: true
+      ownerOpenIds:
+        - 8E4BF9DF3A321BC03F55845EE32C623D   # 主人（私聊 user_openid）
+      adminOpenIds: []                        # 管理员
+      friendOpenIds: []                       # 朋友
+```
+
+| 配置 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `identity.enabled` | boolean | `true` | 是否启用身份识别；三份名单都为空时不注入标签 |
+| `identity.ownerOpenIds` | string[] | `[]` | 主人 openid，人格里的专属称呼只对这些人生效 |
+| `identity.adminOpenIds` | string[] | `[]` | 管理员 openid |
+| `identity.friendOpenIds` | string[] | `[]` | 朋友 openid；未命中任何名单的人都是「陌生人」 |
+
+- 注入形式：消息开头加 `[身份: 主人] ` 这样的标签（私聊也会带，旧版本私聊完全不注入发送者信息）。群聊历史里的每条记录同样带标签。
+- 人格提示词只写「身份: 主人」这类标签，**不要写死 openid**——换 AppID、私聊/群聊都会让 openid 变化。
+- **私聊与群聊的 openid 不同**（`user_openid` / `member_openid`），同一个账号需要分别添加；在 QQ 里发送 `/whoami` 可查看当前场景的 openid。
+- 也可以在设置面板「身份与权限」页签里编辑三份名单，保存后自动重载。
+- 身份标签只影响模型的称呼与语气，不放宽 `access` 访问控制（白名单仍然生效）。
+
+### 长期记忆与关系状态（memory）
+
+按会话独立保存「聊过什么 + 关系进展」，与会话历史解耦：`/new` 只重置上下文，记忆仍在；重启后同样保留（`~/.dsh-qqbot/memory.json`）。
+
+```yaml
+- id: im-qqbot
+  config:
+    memory:
+      enabled: true       # 关闭后不写盘、不注入
+      autoCapture: true   # 从用户自述里自动提取要点
+      maxNotes: 20        # 每个会话最多保留的要点条数（超出淘汰最旧）
+```
+
+| 配置 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `memory.enabled` | boolean | `true` | 是否启用记忆与关系状态；关闭后不写盘、不注入 |
+| `memory.autoCapture` | boolean | `true` | 是否自动捕获「我叫… / 我喜欢… / 我住在…」这类自述；不额外调用模型 |
+| `memory.maxNotes` | number | `20` | 每个会话最多保留的要点条数（1–100），超出淘汰最旧 |
+
+- **关系阶段**由累计互动次数推导：初识（<5）→ 眼熟（<20）→ 熟悉（<60）→ 亲近（<200）→ 很亲近；只影响亲近程度，不改变身份设定。
+- **自动捕获是保守启发式**：只匹配明确的自述句式，跳过疑问句与「他说/听说」这类转述；宁可少记也不乱记。
+- **群聊按群记录**：同一群里不同说话人的要点会带 `[昵称]` 前缀，避免把 A 的自述算到 B 头上。
+- **注入内容**：认识天数、互动次数、关系阶段与要点清单，并要求模型只在相关话题时自然提起、不复述清单、不编造未记录的内容。
+- 可在 QQ 端用 `/memory` 查看和管理（仅管理员），也可在设置面板「记忆与关系」页签调整开关与条数。
 
 ### 访问控制（access）
 
@@ -209,16 +274,22 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 | 命令 | 说明 |
 |------|------|
-| `/new`（别名 `/reset` `/clear`） | 开始新会话（清空上下文） |
-| `/compact` | 压缩会话历史（摘要替换旧记录，保留上下文） |
-| `/model` | 查看或切换模型 |
-| `/preset` | 查看或切换 agent preset（新会话生效） |
-| `/persona`（别名 `/人格`） | 查看人格菜单并切换人格（下一条消息生效）；`/persona default` 跟随默认，`/persona off` 关闭本会话人格 |
-| `/stop` | 中止当前生成 |
+| `/new`（别名 `/reset` `/clear`） | 开始新会话（清空上下文，仅管理员） |
+| `/compact` | 压缩会话历史（摘要替换旧记录，保留上下文，仅管理员） |
+| `/model` | 查看或切换模型（仅管理员） |
+| `/preset` | 查看或切换 agent preset（新会话生效，仅管理员） |
+| `/persona`（别名 `/人格`） | 查看人格菜单并切换人格（下一条消息生效，仅管理员）；`/persona default` 跟随默认，`/persona off` 关闭本会话人格 |
+| `/tools`（别名 `/工具`） | 查看当前人格的工具绑定与宿主可用工具清单（仅管理员）；`/tools <人格id>` 预览某个人格的绑定结果 |
+| `/memory`（别名 `/记忆`） | 查看本会话的长期记忆与关系阶段（仅管理员）；`/memory add <内容>` 手动记一条，`/memory del <序号>` 删除，`/memory clear` 清空要点 |
+| `/whoami`（别名 `/我是谁`） | 查看当前场景下的 openid 与被判定的身份（配置主人/管理员名单用） |
+| `/stop` | 中止当前生成（仅管理员，不在菜单中展示） |
 | `/bot-ping` | 网络延迟检测（返回传输与处理耗时） |
-| `/bot-version` | 查看版本信息 |
-| `/bot-status` | 查看当前会话状态 |
-| `/bot-help` | 查看所有指令 |
+| `/bot-version` | 查看版本信息（模型信息仅管理员可见） |
+| `/bot-status` | 查看当前会话状态（含模型/Preset，仅管理员） |
+| `/bot-help` | 查看当前身份可用的指令（非管理员看不到管理类指令） |
+
+> 权限与 `identity` 名单一致：主人/管理员可用管理类指令，朋友/陌生人只能看到并使用 `/whoami`、`/bot-ping`、`/bot-version`、`/bot-help`。
+> **身份名单为空时视为未启用权限控制**，所有人仍可使用全部指令（避免新配置把自己锁在外面）。
 
 ## 核心模块
 
@@ -258,7 +329,13 @@ src/
 │   ├── prefs-store.ts          # per-peer 偏好持久化（模型/preset/人格）
 │   └── settings-reader.ts      # settings.yaml 只读
 ├── personas/                   # 人格预设
-│   └── persona-utils.ts        # 人格解析 + system prompt section 构造
+│   ├── persona-utils.ts        # 人格解析 + system prompt section 构造
+│   └── persona-tools.ts        # 人格工具白名单 → tools.restrict 硬约束
+├── identity/                   # 身份识别
+│   └── role.ts                 # openid → 主人/管理员/朋友/陌生人 + 身份标签注入
+├── memory/                     # 长期记忆与关系状态
+│   ├── memory-store.ts         # ~/.dsh-qqbot/memory.json 持久化
+│   └── memory-prompt.ts        # 关系阶段 / 自述捕获 / prompt section（order 87）
 ├── features/                   # 交互特性
 │   ├── question-channel.ts     # ask_user_question 问答通道
 │   ├── approval-channel.ts     # approval 审批确认通道
@@ -289,9 +366,11 @@ sessionKey: `qqbot:${appId}:${scope}:${peerId}`，新会话铸造 UUID 会话 id
 - **声明式依赖** — `inject = ['agents']`，不直接耦合其他插件
 - **会话隔离** — 每个 QQ 私聊用户/群聊各一个独立 Agent
 - **Preset 支持** — 可通过 `agent-presets` 服务挂载预设（工具集、prompt 等）
+- **长期记忆** — 按会话保存互动次数、关系阶段与要点（`memory.json`），`/new` 与重启都不清除
 - **闲置回收** — 超时自动 dispose Agent，防止内存泄漏
 - **Markdown 输出** — 回复以 Markdown 格式发送，支持代码块/表格感知切分
 - **图片理解** — 支持 `qqbot_describe_image` 视觉理解，可分析用户发送的图片
+- **做题** — 支持 `qqbot_solve` 解题（题干文本 / 题目截图，走会话当前模型），固定输出「答案 + 过程」两段
 - **附件发送** — 支持 `qqbot_send_file` 将本地文件发送给用户（默认启用路径白名单）
 - **问答互动** — 支持 `ask_user_question`，单选生成内联按钮（点一个其余变灰）、多选回复编号，逐题推进 + 问题级超时
 - **操作确认** — 支持 `approval/request`，关键操作通过「允许/拒绝」按钮请求用户确认
