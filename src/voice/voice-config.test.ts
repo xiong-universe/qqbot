@@ -64,8 +64,10 @@ describe('resolveVoiceSettings（apiKey 门控）', () => {
 });
 
 describe('normalizeVoiceInstruction（情感指令）', () => {
-  it('折叠换行与多余空白，去掉首尾空白', () => {
-    expect(normalizeVoiceInstruction('  请用清冷、平静的语气\n\n语速稍慢  ')).toBe('请用清冷、平静的语气 语速稍慢');
+  it('换行变成「；」：保留场景/逐句结构，同时去掉多余空白', () => {
+    expect(normalizeVoiceInstruction('  请用清冷、平静的语气\n\n语速稍慢  ')).toBe('请用清冷、平静的语气；语速稍慢');
+    expect(normalizeVoiceInstruction('场景：夜里她叫住学长\n第1句：轻声、迟疑\n第2句：吞吐、句尾落地'))
+      .toBe('场景：夜里她叫住学长；第1句：轻声、迟疑；第2句：吞吐、句尾落地');
     expect(normalizeVoiceInstruction('用 元气满满 的语气')).toBe('用 元气满满 的语气');
   });
 
@@ -88,7 +90,7 @@ describe('resolveVoiceSettings（情感指令透出）', () => {
     const settings = resolveVoiceSettings(voiceConfig({
       instruction: ' 请用清冷\n克制的语气，语速稍慢 ',
     }));
-    expect(settings?.instruction).toBe('请用清冷 克制的语气，语速稍慢');
+    expect(settings?.instruction).toBe('请用清冷；克制的语气，语速稍慢');
   });
 
   it('未配置 instruction 时设置里不带该字段', () => {
@@ -148,10 +150,26 @@ describe('buildSpeechInstruction（自然口语提示）', () => {
     expect(buildSpeechInstruction('带点笑意')).toBe(`带点笑意；${NATURAL_SPEECH_HINT}`);
   });
 
+  it('场景 + 逐句走向按「；」下发给 TTS', () => {
+    const scene = buildSpeechInstruction('场景：夜里她叫住学长\n第1句：轻声、迟疑\n第2句：吞吐、句尾落地');
+    expect(scene).toBe(`场景：夜里她叫住学长；第1句：轻声、迟疑；第2句：吞吐、句尾落地；${NATURAL_SPEECH_HINT}`);
+  });
+
   it('超长语气被裁剪，总长不超过上限且提示语完整保留', () => {
     const text = buildSpeechInstruction('柔'.repeat(MAX_VOICE_INSTRUCTION_LEN));
     expect(text.endsWith(NATURAL_SPEECH_HINT)).toBe(true);
     expect(text.length).toBeLessThanOrEqual(MAX_VOICE_INSTRUCTION_LEN);
+  });
+
+  it('超长时停在分句边界，不留下半句走向', () => {
+    const base = `${'柔'.repeat(100)}；${'刚'.repeat(100)}；${'稳'.repeat(100)}；${'定'.repeat(100)}`;
+    const text = buildSpeechInstruction(base);
+    expect(text.endsWith(NATURAL_SPEECH_HINT)).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(MAX_VOICE_INSTRUCTION_LEN);
+    expect(text).not.toContain('定');
+    expect(text.slice(0, -NATURAL_SPEECH_HINT.length - 1)).toBe(
+      `${'柔'.repeat(100)}；${'刚'.repeat(100)}；${'稳'.repeat(100)}`,
+    );
   });
 });
 

@@ -5,7 +5,7 @@
  * 文案里要带上当前音色、情感指令与字数上限，模型才知道该怎么写正文。
  */
 import { describe, expect, it } from 'vitest';
-import type { VoiceConfig } from '../config.ts';
+import { MAX_VOICE_INSTRUCTION_LEN, type VoiceConfig } from '../config.ts';
 import { resolveVoiceSettings } from './voice-config.ts';
 import { buildVoiceOptions } from './voice-presets.ts';
 import { VOICE_PROMPT_ORDER, buildVoicePromptSection } from './voice-prompt.ts';
@@ -52,9 +52,12 @@ describe('buildVoicePromptSection', () => {
     expect(text).toContain('[whispers]');
   });
 
-  it('像真人发语音：每次写具体 instruction、口语短句与语气词、不受「不打句号」限制', () => {
+  it('像真人发语音：instruction 写「场景 + 逐句走向」、口语短句与语气词、不受「不打句号」限制', () => {
     const text = buildVoicePromptSection({ settings: resolveVoiceSettings(voiceConfig()) })?.text ?? '';
-    expect(text).toContain('每次调用都把 instruction 写具体');
+    expect(text).toContain('场景 + 逐句走向');
+    expect(text).toContain('场景：夜里她叫住学长');
+    expect(text).toContain('第1句');
+    expect(text).toContain(String(MAX_VOICE_INSTRUCTION_LEN));
     expect(text).toContain('像念稿');
     expect(text).toContain('1–2 个短句');
     expect(text).toContain('语气词');

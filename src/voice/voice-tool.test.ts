@@ -48,16 +48,16 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
 }
 
 describe('markVoiceRequested', () => {
-  it('打上语音标记并写入单轮情感指令', () => {
+  it('打上语音标记并写入单轮情感指令（换行规范成「；」）', () => {
     const r = record();
     const result = markVoiceRequested(r, 'custom-voice', 200, '  带点笑意\n语速稍快 ');
     expect(r.voiceRequested).toBe(true);
-    expect(r.voiceInstruction).toBe('带点笑意 语速稍快');
+    expect(r.voiceInstruction).toBe('带点笑意；语速稍快');
     expect(result).toEqual({
       ok: true,
       timbre: 'custom-voice',
       maxChars: 200,
-      instruction: '带点笑意 语速稍快',
+      instruction: '带点笑意；语速稍快',
     });
   });
 
@@ -88,6 +88,8 @@ describe('buildVoiceToolMessage', () => {
     expect(text).toContain('不要再重复');
     expect(text).toContain('200');
     expect(text).toContain('不要用 ||| 或换行分条');
+    expect(text).toContain('场景 + 逐句走向');
+    expect(text).toContain('400');
     expect(text).toContain('像念稿');
     expect(text).not.toContain('本轮语气');
   });

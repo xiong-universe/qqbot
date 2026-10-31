@@ -20,7 +20,7 @@ import { createElement, useCallback, useEffect, useState, type CSSProperties, ty
 import { BIND_CONFIG_PATH } from '../shared/bind-protocol.ts';
 import { catalogToolNames, groupToolNames, isPluginToolName, mergeToolNames } from '../shared/tool-catalog.ts';
 import { KAOMOJI_STYLES, DEFAULT_KAOMOJI_STYLE, findKaomojiStyle } from '../expressions/kaomoji.ts';
-import { buildVoiceOptions, voiceOptionLabel } from '../voice/voice-presets.ts';
+import { buildVoiceOptions, voiceOptionLabel, type VoiceOption } from '../voice/voice-presets.ts';
 
 /** 访问控制配置（与 src/config.ts 的 AccessControlConfig 对应的局部投影） */
 interface AccessControlWire {
@@ -123,7 +123,7 @@ type ConfigWire = {
 
 /** 样式注入标记（幂等；版本变化时替换旧样式，避免客户端热更新后仍用旧样式） */
 const STYLE_ID = 'im-qqbot-config-panel-styles';
-const STYLE_VERSION = '6';
+const STYLE_VERSION = '7';
 
 /** DSW 通用设置风格（settings-form / Switch / SegmentedControl 原语复刻） */
 function useConfigPanelStyles(): void {
@@ -152,6 +152,10 @@ function useConfigPanelStyles(): void {
 }
 .imqb2-help { margin: 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary); }
 .imqb2-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
+.imqb2-hint-warn {
+  margin: 4px 0 0; font-size: 12px; line-height: 1.5;
+  color: var(--dsw-alias-state-warning-primary, #b26b00);
+}
 /* Switch（aria-checked 驱动，视觉态与无障碍态同源） */
 .imqb2-switch {
   box-sizing: border-box; position: relative; flex: 0 0 auto;
@@ -388,31 +392,49 @@ function FieldRow({ label, help, value, placeholder, type, onChange }: {
   );
 }
 
+/** 不在候选项里的历史音色值的占位（不可重新选中，只用于回显） */
+const CURRENT_VOICE_OPTION = '__imqb2-current-voice__';
+
 /**
- * 音色输入行（带系统音色下拉提示）
+ * 音色下拉（原生 select，不允许手输）
  *
- * 用 datalist 而不是 select：既能从预设里挑，也能直接粘贴声音复刻/声音设计的专属音色 id。
+ * 候选项 = 自定义音色（置顶）+ 内置系统音色。当前模型不支持的预设也会列出来，
+ * 但标注「需 xxx 模型」；选中这类音色时下面会出现警告，提醒先把「语音模型」改掉。
+ * 旧配置里不在清单中的音色 id 会作为「当前音色」保留，避免一打开面板就被静默改掉。
  */
-function VoicePresetField({ label, value, placeholder, help, listId, options, onChange }: {
+function VoiceSelectField({ label, value, placeholder, help, options, onChange }: {
   label: string; value: string; placeholder?: string; help?: ReactNode;
-  /** 预设为空时不下发 datalist */
-  listId: string; options: { value: string; label: string }[];
-  onChange: (next: string) => void;
+  options: VoiceOption[]; onChange: (next: string) => void;
 }): ReactNode {
+  const current = value.trim();
+  const known = options.some((option) => option.value === current);
+  const mismatch = known ? options.find((option) => option.value === current)?.requiresModel : undefined;
+  const selectValue = known ? current : current === '' ? '' : CURRENT_VOICE_OPTION;
   return createElement('div', { className: 'imqb2-field' },
     createElement('span', { className: 'imqb2-label' }, label),
-    createElement('input', {
-      className: 'imqb2-input', value, placeholder, spellCheck: false,
-      autoComplete: 'off', list: options.length > 0 ? listId : undefined,
-      onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.currentTarget.value); },
-    }),
-    options.length > 0
-      ? createElement('datalist', { id: listId },
-          options.map((option) => createElement('option', {
-            key: option.value, value: option.value, label: option.label,
-          })),
-        )
-      : null,
+    createElement('select', {
+      className: 'imqb2-input imqb2-select', value: selectValue,
+      onChange: (event: ChangeEvent<HTMLSelectElement>) => {
+        const next = event.currentTarget.value;
+        // 历史音色占位项不可再被选中（它只用于展示当前值）
+        if (next === CURRENT_VOICE_OPTION) return;
+        onChange(next);
+      },
+    },
+      createElement('option', { value: '' }, placeholder ?? '（留空，继承全局音色）'),
+      current !== '' && !known
+        ? createElement('option', { value: CURRENT_VOICE_OPTION },
+            `${current}（当前音色，不在列表中）`)
+        : null,
+      options.map((option) => createElement('option', { key: option.value, value: option.value },
+        option.requiresModel === undefined
+          ? option.label
+          : `${option.label} · 需 ${option.requiresModel} 模型`)),
+    ),
+    mismatch === undefined
+      ? null
+      : createElement('p', { className: 'imqb2-hint-warn' },
+          `当前音色只支持 ${mismatch}，与现用语音模型不匹配，合成会失败；请把「语音模型」改成 ${mismatch}。`),
     help === undefined ? null : createElement('p', { className: 'imqb2-hint' }, help),
   );
 }
@@ -548,7 +570,7 @@ function ToolPicker({ selected, available, onChange }: {
 function PersonaCard({ index, value, expanded, available, voiceOptions, onChange, onToggle, onRemove }: {
   index: number; value: PersonaWire; expanded: boolean; available: string[];
   /** 语音音色预设（与全局页签使用同一份清单） */
-  voiceOptions: { value: string; label: string }[];
+  voiceOptions: VoiceOption[];
   onChange: (next: Partial<PersonaWire>) => void; onToggle: () => void; onRemove: () => void;
 }): ReactNode {
   const title = value.name.trim() || value.id.trim() || `人格 ${index + 1}`;
@@ -669,13 +691,13 @@ function PersonaCard({ index, value, expanded, available, voiceOptions, onChange
             createElement('p', { className: 'imqb2-hint' },
               '开启后把该风格的颜文字清单写进 system prompt，模型按语境自然使用（默认一条回复最多 1 个），不需要工具调用。'),
           ),
-          createElement(VoicePresetField, {
+          createElement(VoiceSelectField, {
             label: '语音音色',
             value: value.expressions?.voice?.voice ?? '',
-            placeholder: '留空继承全局音色（如 longanfengyue）',
-            listId: `imqb2-voice-presets-persona-${index}`,
+            placeholder: '（留空，继承全局音色）',
             options: voiceOptions,
-            help: '可从下拉里选系统音色或自定义音色，也可粘贴声音复刻/设计得到的专属音色 id；留空则继承全局音色。语音总开关在「语音回复」页签的 API Key。',
+            help: '从下拉里选内置系统音色或自定义音色；留空继承全局音色。'
+              + '标了「需 xxx 模型」的音色与当前语音模型不匹配，需要先把全局「语音模型」改过去。',
             onChange: (nextVoiceId) => { updatePersonaVoice({ voice: nextVoiceId }); },
           }),
           createElement(FieldRow, {
@@ -1150,18 +1172,21 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     createElement('div', { className: 'imqb2-group-title' }, '模型与音色'),
     createElement(FieldRow, {
       label: '语音模型', value: voice.model ?? '', placeholder: 'qwen-audio-3.0-tts-flash',
-      help: 'DashScope 语音合成模型 id（需在百炼控制台开通；如 cosyvoice-v2）',
+      help: 'qwen-audio-3.0-tts-flash 支持全部内置系统音色；qwen-audio-3.0-tts-plus 只支持部分系统音色，'
+        + '以及声音复刻/设计的专属音色。音色 id 与模型强绑定，切换模型前先确认音色是否兼容。',
       onChange: (v) => { patch('voice', { ...voice, model: v }); },
     }),
-    createElement(VoicePresetField, {
+    createElement(VoiceSelectField, {
       label: '默认音色',
       value: voice.voice ?? '',
-      placeholder: 'longanfengyue（龙安风悦）',
-      listId: 'imqb2-voice-presets-global',
+      placeholder: '（留空，使用缺省音色）',
       options: voiceOptions,
       help: voiceOptions.length > 0
-        ? `下拉可选 ${voiceOptions.length} 个音色（自定义 ${customPresetCount} 个在最前，其后为内置系统音色）；也可直接粘贴专属音色 id。人格可在「人格预设」里覆盖。`
-        : '暂无可用音色清单：在下面「自定义音色」里添加，或手动填写该模型支持的音色 id。人格可在「人格预设」里覆盖。',
+        ? `只能从下拉里选（自定义 ${customPresetCount} 个置顶，其后为内置系统音色）。`
+          + '内置音色与模型强绑定：标了「需 xxx 模型」的项要先改上面的「语音模型」。'
+          + '要新增复刻/设计音色，请在下方「自定义音色」里添加名称 + id。人格可在「人格预设」里覆盖。'
+        : '当前模型没有可确认的内置音色清单：请在下方「自定义音色」里添加名称 + id，'
+          + '或把「语音模型」改成 qwen-audio-3.0-tts-flash / qwen-audio-3.0-tts-plus。',
       onChange: (v) => { patch('voice', { ...voice, voice: v }); },
     }),
     createElement(VoicePresetListField, {
@@ -1170,8 +1195,11 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }),
     createElement('div', { className: 'imqb2-group-title' }, '情感与语气'),
     createElement(AreaRow, {
-      label: '情感/语气指令', rows: 2,
-      help: '用自然语言描述语速、情绪与说话方式，合成时随请求下发（≤200 字）。例：请用清冷、平静、略带疏离的语气，语速稍慢。留空 = 模型默认语气；人格可在「人格预设」里单独覆盖。',
+      label: '情感/语气指令', rows: 4,
+      help: '可写成「场景 + 逐句走向」，合成时随请求下发（≤400 字）。'
+        + '例：场景：夜里教学楼走廊，她叫住学长，紧张又鼓起勇气；第1句：很轻、迟疑；'
+        + '第2句：吞吐、有停顿；第3句：柔和带笑；第4句：转为坚定、加快一点。'
+        + '留空 = 模型默认语气；人格可在「人格预设」里单独覆盖。',
       value: voice.instruction ?? '',
       onChange: (v) => { patch('voice', { ...voice, instruction: v }); },
     }),

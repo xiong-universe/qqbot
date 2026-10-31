@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   VOICE_PRESETS,
   VOICE_PRESET_MODEL,
+  VOICE_PRESET_MODEL_PLUS,
   buildVoiceOptions,
   findVoicePreset,
   formatVoicePresetLabel,
@@ -30,6 +31,11 @@ describe('voicePresets', () => {
 
   it('按模型过滤：未知模型（如 cosyvoice-v2）不返回预设', () => {
     expect(voicePresetsForModel('cosyvoice-v2')).toHaveLength(0);
+  });
+
+  it('plus 模型只列出实测兼容的内置音色', () => {
+    const plusOnly = voicePresetsForModel(VOICE_PRESET_MODEL_PLUS).map((preset) => preset.id);
+    expect(plusOnly).toEqual(['longanlingxi', 'longanhuan_v3.6']);
   });
 
   it('findVoicePreset 命中与未命中', () => {
@@ -68,6 +74,17 @@ describe('buildVoiceOptions（自定义音色置顶）', () => {
     expect(buildVoiceOptions(undefined, VOICE_PRESET_MODEL)).toHaveLength(VOICE_PRESETS.length);
     expect(buildVoiceOptions([], VOICE_PRESET_MODEL)).toHaveLength(VOICE_PRESETS.length);
     expect(buildVoiceOptions([], 'cosyvoice-v2')).toHaveLength(0);
+  });
+
+  it('plus 模型下仍列出全部内置音色：兼容项无标注，不兼容项标出需要 flash', () => {
+    const options = buildVoiceOptions([{ name: '御姐', voice: 'vd-ee1c' }], VOICE_PRESET_MODEL_PLUS);
+    expect(options).toHaveLength(1 + VOICE_PRESETS.length);
+    expect(options[0]).toEqual({ value: 'vd-ee1c', label: '御姐（自定义）' });
+
+    const lingxi = options.find((option) => option.value === 'longanlingxi');
+    expect(lingxi?.requiresModel).toBeUndefined();
+    const fengyue = options.find((option) => option.value === 'longanfengyue');
+    expect(fengyue?.requiresModel).toBe(VOICE_PRESET_MODEL);
   });
 
   it('没有音色 id / 重复 id 的自定义项被跳过，名称留空时用 id 兜底', () => {

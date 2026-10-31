@@ -51,10 +51,10 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 }
 
 /**
- * 情感/语气指令规范化：折叠换行与多余空白、按上限截断。
+ * 情感/语气指令规范化：把分行描述连成一段、折叠多余空白、按上限截断。
  *
- * 空白归一很重要——instruction 会被原样塞进 `run-task` 的 `parameters`，
- * 多行描述在 wire 上没有必要，单行更利于模型理解。
+ * 模型常把「场景」「第1句」「第2句」分行写，这里把换行换成「；」：
+ * 既保留逐句走向的可读结构，也不会在 wire 上出现一堆无意义空白。
  * 返回 undefined 表示未配置（调用方不下发该参数）。
  */
 export function normalizeVoiceInstruction(
@@ -62,7 +62,13 @@ export function normalizeVoiceInstruction(
   maxLen: number = MAX_VOICE_INSTRUCTION_LEN,
 ): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const text = value.replace(/\s+/g, ' ').trim();
+  const text = value
+    .replace(/\r\n?/g, '\n')
+    .replace(/\s*\n+\s*/g, '；')
+    .replace(/[ \t\u3000]+/g, ' ')
+    .replace(/；{2,}/g, '；')
+    .replace(/^[；\s]+/, '')
+    .replace(/[；\s]+$/, '');
   if (text === '') return undefined;
   return text.length > maxLen ? text.slice(0, maxLen).trimEnd() : text;
 }
@@ -77,6 +83,19 @@ export function normalizeVoiceInstruction(
 export const NATURAL_SPEECH_HINT = '像发微信语音一样随口说，自然一点，不要播音腔、不要朗读腔';
 
 /**
+ * 指令超长时优先停在分句边界（「；」「。」），不要切掉半句走向。
+ */
+function clipInstruction(text: string, room: number): string {
+  const head = text.slice(0, room);
+  if (text.length <= room) return head;
+  const stop = Math.max(head.lastIndexOf('；'), head.lastIndexOf('。'), head.lastIndexOf('，'));
+  const cut = stop !== -1 && stop + 1 >= Math.ceil(room * 0.6)
+    ? head.slice(0, stop + 1)
+    : head;
+  return cut.replace(/[；。，、]+$/, '').trimEnd();
+}
+
+/**
  * 组装最终下发给 TTS 的 instruction：人格/单轮指令 + 自然口语提示。
  *
  * 总长度受 `MAX_VOICE_INSTRUCTION_LEN` 限制；超长时优先保留提示语，
@@ -86,7 +105,7 @@ export function buildSpeechInstruction(base?: string): string {
   const room = MAX_VOICE_INSTRUCTION_LEN - NATURAL_SPEECH_HINT.length - 1;
   const normalized = normalizeVoiceInstruction(base);
   if (normalized === undefined || room <= 0) return NATURAL_SPEECH_HINT;
-  const head = normalized.length > room ? normalized.slice(0, room).trimEnd() : normalized;
+  const head = clipInstruction(normalized, room);
   return head === '' ? NATURAL_SPEECH_HINT : `${head}；${NATURAL_SPEECH_HINT}`;
 }
 

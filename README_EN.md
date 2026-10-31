@@ -171,7 +171,7 @@ Speak replies instead of typing them: built on DashScope real-time speech synthe
       apiKey: ''                        # empty = voice disabled; fill in a Bailian API key to enable
       model: qwen-audio-3.0-tts-flash   # TTS model (cosyvoice-v2 and others also work)
       voice: longanfengyue              # default timbre
-      instruction: 请用清冷、克制的语气，语速稍慢   # emotion/tone instruction (natural language, optional)
+      instruction: 场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑，语速偏慢；第2句：吞吐、句尾落地   # emotion/tone instruction (natural language, optional)
       presets:                          # custom timbres (listed above the built-in presets)
         - name: 元气少女
           voice: qwen-audio-3.0-tts-plus-vd-bailian-85212a2f84dc4f55ba9cddc8fef8be1c
@@ -186,7 +186,7 @@ Speak replies instead of typing them: built on DashScope real-time speech synthe
 | `voice.apiKey` | string | `''` | DashScope API key; **empty = voice disabled** (in the settings panel, leaving it empty keeps the saved key — use "Clear saved key" to actually disable) |
 | `voice.model` | string | `qwen-audio-3.0-tts-flash` | TTS model id; the model must be activated in the Bailian console |
 | `voice.voice` | string | `longanfengyue` | Default timbre id; personas can override it via `expressions.voice.voice` |
-| `voice.instruction` | string | `''` | Emotion/tone instruction (natural language, ≤200 chars): speed, mood, delivery; personas can override it via `expressions.voice.instruction` |
+| `voice.instruction` | string | `''` | Emotion/tone instruction (natural language, ≤400 chars): can be written as "scene + per-sentence delivery" (see below); personas can override it via `expressions.voice.instruction` |
 | `voice.presets` | array | `[]` | Custom timbre list (`{ name, voice }`, ≤20); **listed before the built-in presets** in the dropdown, newest first |
 | `voice.baseUrl` | string | `''` | Custom WebSocket URL (`ws://` / `wss://`); empty falls back to workspace or the official gateway |
 | `voice.workspace` | string | `''` | Bailian workspace id (builds the MaaS URL and sends `X-DashScope-WorkSpace`) |
@@ -195,14 +195,14 @@ Speak replies instead of typing them: built on DashScope real-time speech synthe
 
 - **Model decides, voice replaces text**: when voice is enabled the model gets a "voice reply" note (order 88). If voice fits ("say something", "send a voice message", "let me hear your voice", "sing a song", short goodnight/comforting lines) it calls `qqbot_voice`, and the reply body of that turn is only used for synthesis — it is not sent as a text message, so there is no "text first, then the same voice again".
 - **Automatic fallback**: auth errors, unactivated models, network timeouts or unspeakable content degrade to the original text reply, so the message is never lost; temporary audio is written to `~/.dsh-qqbot/media` and deleted after sending.
-- **Per-persona timbre**: `personas[].expressions.voice` overrides the global timbre, rate, volume and emotion instruction; the change applies to the next voice message after switching personas. The model may also pick a one-off tone (e.g. "with a smile") for the current turn, and the voice prompt asks it to **write a concrete tone on every call** so replies do not all share the same default delivery.
+- **Per-persona timbre**: `personas[].expressions.voice` overrides the global timbre, rate, volume and emotion instruction; the change applies to the next voice message after switching personas. The model may also write a one-off "scene + per-sentence delivery" instruction for the current turn (e.g. `场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑…`), lasting only that turn. The voice prompt asks it to **write the scene and the delivery of each sentence on every call** so replies do not all share the same default delivery.
 - **Automatic cleanup**: code blocks, URLs, Markdown symbols, the `|||` delimiter and kaomoji are not read aloud; `|||` and line breaks both become sentence boundaries and a terminal mark is added, so the reading has natural pauses and a proper ending.
 - **Runtime requirement**: uses the built-in WebSocket in Node 22+; on Node 20 voice is disabled at startup with a warning even if a key is filled in.
 - The "Voice replies" tab in the settings panel edits these fields; a saved API key is **never echoed back**, only a "saved" state is shown.
 
-#### Built-in timbre presets (`qwen-audio-3.0-tts-flash`)
+#### Built-in timbre presets (model compatibility is labelled)
 
-The "Default timbre" field and each persona's "Voice timbre" field offer a dropdown (datalist). These ids were all verified against a real account:
+The "Default timbre" field and each persona's "Voice timbre" field are **native, non-editable dropdowns**. These ids were all verified against a real account:
 
 | Name | Voice id | Character |
 |------|----------|-----------|
@@ -219,17 +219,20 @@ The "Default timbre" field and each persona's "Voice timbre" field offer a dropd
 | Loong John | `loongjohn` | calm, friendly American English (male, 28) |
 | Loong Eva | `loongeva_v3.6` | high-intelligence American English (female, 28) |
 
-- Presets only apply to `qwen-audio-3.0-tts-flash`; with another model (e.g. `cosyvoice-v2`) the dropdown is empty and you must type a timbre id that model supports.
-- Custom ids from voice cloning / voice design (e.g. `qwen-audio-3.0-tts-plus-vd-bailian-<hash>`) can be pasted directly; they do not need to be in the preset list, and the same suffix is shared between plus and flash.
+- Timbres are strongly tied to the model (verified 2026-10): `qwen-audio-3.0-tts-flash` supports all 12 built-in timbres above, while `qwen-audio-3.0-tts-plus` only supports `longanlingxi` and `longanhuan_v3.6` (the other built-ins fail with `Engine error [411]`). The dropdown **still lists every built-in timbre** and marks the ones the current model does not support as "requires qwen-audio-3.0-tts-flash"; selecting an incompatible timbre shows a warning — change "TTS model" accordingly.
+- With an unknown model (e.g. `cosyvoice-v2`) the dropdown only contains custom timbres (no confirmed compatibility matrix); you must check which ids that model supports yourself.
+- Custom ids from voice cloning / voice design (e.g. `qwen-audio-3.0-tts-plus-vd-bailian-<hash>`) are added via "Custom timbres" (name + id); they do not need to be in the built-in list, and the same suffix is shared between plus and flash.
 
 #### Custom timbres and emotion control
 
 - **Add a timbre manually**: in the settings panel → "Voice replies" → "Custom timbres", click "＋ Add timbre" and fill in a name + timbre id (or write them into `voice.presets`). New rows are inserted at the top of the list, so the dropdown shows the newest custom timbre first and the built-in presets last; an empty name falls back to the id, rows without an id are dropped on save (max 20).
-- **Emotion / tone (`instruction`)**: `voice.instruction` is one natural-language sentence describing speed, mood and delivery (≤200 chars), sent as `parameters.instruction` in `run-task`; personas can override it via `personas[].expressions.voice.instruction` (empty inherits the global value). Before synthesis the plugin appends a short "say it like a WeChat voice message, no announcer or reading tone" hint to that instruction (clipped so the total stays ≤200 chars), so one static direction does not turn every line into a broadcast read. Examples:
-  - cool senpai: `请用清冷、平静、略带疏离的语气，语速稍慢，情绪克制`
-  - energetic girl: `请用元气满满、轻快、带笑意的语气，语速稍快，句尾上扬`
-  - maid: `请用恭敬、轻柔、温和的语气，语速平缓，带一点体贴的笑意`
-  - mature lady: `请用成熟、慵懒、略带温柔的语调，语速稍慢，气息柔和`
+- **Emotion / tone (`instruction`)**: `voice.instruction` is a natural-language description of "the scene for this turn + how each sentence should be delivered" (≤400 chars), sent as `parameters.instruction` in `run-task` and **never spoken aloud**; personas can override it via `personas[].expressions.voice.instruction` (empty inherits the global value). Line breaks are normalised to "；", so you can write scene / sentence 1 / sentence 2 on separate lines; over-long instructions are clipped at sentence boundaries. Before synthesis the plugin appends a short "say it like a WeChat voice message, no announcer or reading tone" hint. Examples:
+  - scene + per sentence: `场景：夜里她叫住学长，楼道很静，她有点紧张；第1句：声音很轻、带一点迟疑，语速偏慢；第2句：吞吐、有自然停顿，句尾不要往上飘；第3句：柔和、带一点温暖的笑意，语速平稳`
+  - one-liner reply: `场景：深夜私聊，她困得不行；这一句：声音轻而软，慢一点，句尾落地`
+  - cool senpai: `场景：安静的图书馆，她说话很克制；每一句都平淡、语速稍慢，句尾不上扬`
+  - energetic girl: `场景：放学路上阳光很好；每一句都轻快、带笑意，语速稍快`
+  - maid: `场景：主人刚回家，她在门口迎接；每一句都恭敬、轻柔，带一点体贴的笑意`
+  - mature lady: `场景：深夜酒吧，她半靠在吧台上；每一句都成熟、慵懒，气息柔和，语速稍慢`
 - **Inline emotion tags** (service capability, supported by `qwen-audio-3.0-tts-plus / flash`): `[excited]`, `[sad]`, `[serious]`, `[laughing]`, `[sighing]`, `[whispers]`, `[very slowly]` / `[very fast]`, … **Only these whitelisted tags are forwarded to TTS as-is**; any other bracketed text is treated as a note and dropped (so `[pause:1s]` is never read aloud). Prefer `instruction` for everyday emotion control (or a one-off tone for the current turn) — use tags when the emotion changes sentence by sentence.
 - **The reply text is cleaned as a script**: before synthesis, `|||` and line breaks both become sentence boundaries (periods, not one run-on utterance), repeated punctuation is merged, spaces around punctuation are removed and a terminal mark is added; stage directions in brackets/braces/asterisks (`（小声）`, `【突然】`, `*叹气*`) are dropped, and code blocks, URLs, Markdown, kaomoji are stripped before `maxChars` truncation (truncation prefers a sentence end and never cuts a tag in half).
 

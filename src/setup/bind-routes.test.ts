@@ -715,7 +715,7 @@ describe('bind-routes', () => {
     );
     expect(res.statusCode).toBe(200);
     const voice = (saved?.voice ?? {}) as Record<string, unknown>;
-    expect(voice.instruction).toBe('请用清冷、克制的语气 语速稍慢');
+    expect(voice.instruction).toBe('请用清冷、克制的语气；语速稍慢');
     expect(voice.presets).toEqual([
       { name: '御姐', voice: 'vd-ee1c' },
       { name: 'vd-8521', voice: 'vd-8521' },
@@ -732,7 +732,7 @@ describe('bind-routes', () => {
       routes.get(BIND_CONFIG_PATH),
       fakeReq('POST', { host: '127.0.0.1:3080' }, JSON.stringify({
         voice: {
-          instruction: '柔'.repeat(250),
+          instruction: '柔'.repeat(450),
           presets: [{ name: '名'.repeat(40), voice: 'vd-x' }],
         },
       })),
@@ -740,7 +740,7 @@ describe('bind-routes', () => {
     );
     expect(res.statusCode).toBe(200);
     const voice = (saved?.voice ?? {}) as Record<string, unknown>;
-    expect((voice.instruction as string).length).toBe(200);
+    expect((voice.instruction as string).length).toBe(400);
     expect(voice.presets).toEqual([{ name: '名'.repeat(32), voice: 'vd-x' }]);
   });
 
