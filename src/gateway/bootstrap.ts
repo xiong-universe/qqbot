@@ -28,6 +28,10 @@ import { registerSolveTool } from '../features/solve-tool.ts';
 import { registerTextTools } from '../features/text-tools.ts';
 import { registerSendFileTool, type MediaSenderLike } from '../media/send-file-tool.ts';
 import { DeliverablesDeliverer } from '../transport/deliverables.ts';
+import { createVoiceSpeaker } from '../voice/voice-reply.ts';
+import { resolveActiveVoiceSettings } from '../voice/voice-config.ts';
+import { buildVoiceOptions } from '../voice/voice-presets.ts';
+import { registerVoiceTool, VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
 
 /**
  * interaction 统一分发器：按 button_data 的顶层 `t` 判别字段，路由到对应
@@ -115,7 +119,25 @@ export async function bootstrapGateway(
   // 交付物投递：present 声明的文件在轮末发送到当前会话（outbound 路由触发）
   const deliverablesDeliverer = new DeliverablesDeliverer(sender, mediaSender, config, logger);
 
-  const outbound = createOutboundHandler(manager, sender, config, logger, toolsRegistry, deliverablesDeliverer);
+  // ── 语音回复（TTS）──
+  // 门控完全由配置决定：voice.apiKey 为空 = 不创建 speaker、不注册工具、不发语音。
+  // 是否真的要发语音由上层模型判断（调用 qqbot_voice），不再做字符匹配。
+  // 运行时缺少内置 WebSocket（Node 20）时同样关闭，并给出一次启动告警。
+  const voiceSpeaker = createVoiceSpeaker({ manager, voice: config.voice, sender: mediaSender, logger });
+  const voiceSettings = resolveActiveVoiceSettings(config.voice);
+  if (voiceSpeaker === undefined || voiceSettings === undefined) {
+    logger.info('im-qqbot: 语音回复未启用（voice.apiKey 为空或运行时缺少 WebSocket）');
+  } else {
+    const voiceOptions = buildVoiceOptions(config.voice?.presets, config.voice?.model);
+    registerVoiceTool(ctx, { manager, settings: voiceSettings, voiceOptions, logger });
+    logger.info(`im-qqbot: 语音回复已启用（model=${voiceSettings.model}, voice=${voiceSettings.voice}）`);
+    // 启动状态打到 stdout：logger.info 不落在终端日志里，本地起服务时靠这行确认语音是否生效
+    console.log(`[im-qqbot] Voice enabled (model=${voiceSettings.model}, voice=${voiceSettings.voice}, tool=${VOICE_TOOL_NAME})`);
+  }
+
+  const outbound = createOutboundHandler(
+    manager, sender, config, logger, toolsRegistry, deliverablesDeliverer, voiceSpeaker,
+  );
   (ctx as unknown as { on(event: string, handler: (...args: unknown[]) => void): void })
     .on('session/event', outbound.routeSessionEvent as (...args: unknown[]) => void);
 

@@ -92,6 +92,32 @@ describe('buildPersonaPromptSections', () => {
     ]);
   });
 
+  it('额外放行的工具（语音）也写进权限说明，避免模型以为不可用', () => {
+    const sections = buildPersonaPromptSections(
+      { id: 'p5', name: '助手', prompt: '你是助手。', tools: ['qqbot_translate'] },
+      undefined,
+      { extraTools: ['qqbot_voice', ' qqbot_translate '] },
+    );
+    expect(sections).toEqual([
+      { name: 'qqbot:persona', order: 85, text: '你是助手。' },
+      {
+        name: 'qqbot:persona-tools',
+        order: PERSONA_TOOLS_ORDER,
+        text: '本会话仅绑定了这些工具：qqbot_translate、qqbot_voice。'
+          + '其余工具不可用；超出范围的请求请直接说明做不到，不要假装执行。',
+      },
+    ]);
+  });
+
+  it('人格没写 tools 时不因额外工具产生权限说明（默认清单本来就很宽）', () => {
+    const sections = buildPersonaPromptSections(
+      { id: 'p6', name: '助手', prompt: '你是助手。' },
+      undefined,
+      { extraTools: ['qqbot_voice'] },
+    );
+    expect(sections).toEqual([{ name: 'qqbot:persona', order: 85, text: '你是助手。' }]);
+  });
+
   it('空工具数组成「没有工具」的说明', () => {
     const sections = buildPersonaPromptSections(
       { id: 'p4', name: '纯聊天', prompt: '你只聊天。', tools: [] },

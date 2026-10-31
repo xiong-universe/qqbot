@@ -49,6 +49,7 @@ function setup(opts?: {
   record?: SessionRecord | undefined;
   config?: ImQQBotConfig;
   deliverer?: { deliver: ReturnType<typeof vi.fn> };
+  voice?: { speak: ReturnType<typeof vi.fn> };
 }) {
   const session = createSession();
   const bot = createBot(session);
@@ -56,10 +57,11 @@ function setup(opts?: {
   const manager = {
     findBySessionId: vi.fn((id: string) => (id === 'sess-qq' ? record : undefined)),
   } as unknown as SessionManager;
+  const logger = createLogger();
   const outbound = createOutboundHandler(
-    manager, bot, opts?.config ?? createConfig(), createLogger(), undefined, opts?.deliverer,
+    manager, bot, opts?.config ?? createConfig(), logger, undefined, opts?.deliverer, opts?.voice,
   );
-  return { outbound, bot, session };
+  return { outbound, bot, session, record, logger };
 }
 
 const delta = (attemptId: string, text: string) => ({ kind: 'text-delta' as const, attemptId, text });
@@ -227,7 +229,7 @@ describe('OutboundRouter: 回复拆分', () => {
     expect(bot.sendMarkdown).toHaveBeenNthCalledWith(2, c2cTarget, '段落二');
   });
 
-  it('delimiter 模式：只在 ||| 处拆分，正文换行保留在同一条', async () => {
+  it('delimiter 模式：出现 ||| 时，段内剩余换行也按分条处理', async () => {
     const { outbound, bot } = setup({ config: createConfig({ replySplitMode: 'delimiter' }) });
 
     outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, {
@@ -237,9 +239,10 @@ describe('OutboundRouter: 回复拆分', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(bot.openStream).not.toHaveBeenCalled();
-    expect(bot.sendMarkdown).toHaveBeenCalledTimes(2);
-    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(1, c2cTarget, '第一句\n第二句');
-    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(2, c2cTarget, '第三句');
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(3);
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(1, c2cTarget, '第一句');
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(2, c2cTarget, '第二句');
+    expect(bot.sendMarkdown).toHaveBeenNthCalledWith(3, c2cTarget, '第三句');
   });
 
   it('delimiter 模式：分隔符固定为 |||（其他字符串不拆）', async () => {
@@ -395,5 +398,154 @@ describe('OutboundRouter: deliverables/presented', () => {
     await Promise.resolve();
 
     expect(bot.sendMarkdown).not.toHaveBeenCalled();
+  });
+});
+
+describe('OutboundRouter: 语音回复（模型决定）', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const turnEnd = { type: 'turn/end', data: { reason: { kind: 'stop' } } };
+  const message = (text: string) => ({
+    type: 'assistant/message',
+    data: { message: { content: [{ type: 'text', text }] } },
+  });
+
+  it('语音轮：正文不发文字，轮末合成语音', async () => {
+    const speak = vi.fn().mockResolvedValue(true);
+    const { outbound, bot, record } = setup({ voice: { speak } });
+    record.voiceRequested = true;
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('晚安，早点睡'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bot.sendMarkdown).not.toHaveBeenCalled(); // 正文只用于合成
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(speak).toHaveBeenCalledWith(record, '晚安，早点睡');
+    expect(bot.sendMarkdown).not.toHaveBeenCalled(); // 不会再发一遍同样的文字
+  });
+
+  it('语音轮不流式：即使开启 streaming，也不会先把文字流出去', async () => {
+    const speak = vi.fn().mockResolvedValue(true);
+    const bot = createBot(createSession());
+    const record = createRecord(c2cTarget);
+    record.voiceRequested = true;
+    const manager = { findBySessionId: vi.fn(() => record) } as unknown as SessionManager;
+    const local = createOutboundHandler(
+      manager, bot, createConfig(), createLogger(), undefined, undefined, { speak },
+    );
+
+    local.routeStreamFrame('sess-qq', start('a1'));
+    local.routeStreamFrame('sess-qq', delta('a1', '语音内容'));
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(bot.openStream).not.toHaveBeenCalled();
+  });
+
+  it('语音合成失败：退回文字，用户不会什么都收不到', async () => {
+    const speak = vi.fn().mockResolvedValue(false);
+    const { outbound, bot, record } = setup({ voice: { speak } });
+    record.voiceRequested = true;
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('这条语音合成失败了'));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(speak).toHaveBeenCalledTimes(1);
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, '这条语音合成失败了');
+  });
+
+  it('轮末复位标记：下一轮不再按语音处理', async () => {
+    const speak = vi.fn().mockResolvedValue(true);
+    const { outbound, bot, record } = setup({ voice: { speak } });
+    record.voiceRequested = true;
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('第一轮语音'));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    expect(record.voiceRequested).toBeUndefined();
+    expect(record.voiceInstruction).toBeUndefined();
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('第二轮文字'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, '第二轮文字');
+  });
+
+  it('未配置语音时：模型标记了语音也只会发文字（不吞消息）', async () => {
+    const { outbound, bot, record } = setup();
+    record.voiceRequested = true;
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('没有语音能力的兜底'));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, '没有语音能力的兜底');
+  });
+
+  it('时序兜底：正文先发出、之后才调用 qqbot_voice → 不再补一条同内容语音', async () => {
+    const speak = vi.fn().mockResolvedValue(true);
+    const { outbound, bot, record, logger } = setup({ voice: { speak } });
+
+    // 模型先写正文（此时还没决定语音），文字照常发出
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('笨蛋|||知道了 我爱你'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(1);
+
+    // 之后才调用 qqbot_voice：正文已经送达，轮末不能再用同内容合成语音
+    record.voiceRequested = true;
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('笨蛋|||知道了 我爱你'));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(speak).not.toHaveBeenCalled();
+    expect(bot.sendMarkdown).toHaveBeenCalledTimes(1); // 也没有退回文字造成第二次重复
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('跳过语音以免重复'));
+  });
+
+  it('已发文字后语音轮另写新正文：新正文仍会送到用户（不吞内容）', async () => {
+    const speak = vi.fn().mockResolvedValue(true);
+    const { outbound, bot, record } = setup({ voice: { speak } });
+
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('第一段文字'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    record.voiceRequested = true;
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('第二段只能发文字'));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(speak).not.toHaveBeenCalled();
+    expect(bot.sendMarkdown).toHaveBeenCalledWith(c2cTarget, '第二段只能发文字');
+  });
+
+  it('边流式边调用 qqbot_voice：文字已可见时轮末不合成语音', async () => {
+    const speak = vi.fn().mockResolvedValue(true);
+    const { outbound, bot, record } = setup({ voice: { speak } });
+
+    outbound.routeStreamFrame('sess-qq', start('a1'));
+    outbound.routeStreamFrame('sess-qq', delta('a1', '流式已可见的文字'));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(bot.openStream).toHaveBeenCalledTimes(1);
+
+    record.voiceRequested = true;
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, message('流式已可见的文字'));
+    outbound.routeSessionEvent({ header: { id: 'sess-qq' } }, turnEnd);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(speak).not.toHaveBeenCalled();
   });
 });

@@ -20,6 +20,7 @@ import { createElement, useCallback, useEffect, useState, type CSSProperties, ty
 import { BIND_CONFIG_PATH } from '../shared/bind-protocol.ts';
 import { catalogToolNames, groupToolNames, isPluginToolName, mergeToolNames } from '../shared/tool-catalog.ts';
 import { KAOMOJI_STYLES, DEFAULT_KAOMOJI_STYLE, findKaomojiStyle } from '../expressions/kaomoji.ts';
+import { buildVoiceOptions, voiceOptionLabel } from '../voice/voice-presets.ts';
 
 /** 访问控制配置（与 src/config.ts 的 AccessControlConfig 对应的局部投影） */
 interface AccessControlWire {
@@ -52,6 +53,40 @@ interface KaomojiWire {
   maxPerReply?: number;
 }
 
+/** 人格语音音色（空对象不带任何字段；留空继承全局音色） */
+interface PersonaVoiceWire {
+  voice?: string;
+  rate?: number;
+  volume?: number;
+  /** 情感/语气指令（留空继承全局 voice.instruction） */
+  instruction?: string;
+}
+
+/** 用户手动添加的音色（名称 + 音色 id） */
+interface VoicePresetEntryWire {
+  name?: string;
+  voice?: string;
+}
+
+/** 全局语音回复配置（apiKey 永不回显，只回 hasApiKey） */
+interface VoiceWire {
+  apiKey?: string;
+  /** GET 回显的只读提示；提交时忽略 */
+  hasApiKey?: boolean;
+  /** 提交时显式清空已保存的 Key（= 关闭语音） */
+  clearApiKey?: boolean;
+  model?: string;
+  voice?: string;
+  /** 情感/语气指令（自然语言） */
+  instruction?: string;
+  /** 自定义音色（下拉里排在内置系统预设之前） */
+  presets?: VoicePresetEntryWire[];
+  baseUrl?: string;
+  workspace?: string;
+  maxChars?: number;
+  timeoutMs?: number;
+}
+
 /** 人格预设（与 src/config.ts 的 PersonaPreset 对应的局部投影） */
 interface PersonaWire {
   id: string;
@@ -60,7 +95,7 @@ interface PersonaWire {
   /** 工具白名单；undefined = 使用默认放行清单（插件内置工具 + 只读联网/提问） */
   tools?: string[];
   /** 表达方式；必须显式 enabled:true 才启用（Schema 会物化默认子对象） */
-  expressions?: { kaomoji?: KaomojiWire };
+  expressions?: { kaomoji?: KaomojiWire; voice?: PersonaVoiceWire };
 }
 
 /** GET 回显的生效配置（appSecret 已剔除） */
@@ -82,12 +117,13 @@ type ConfigWire = {
   identity?: IdentityWire;
   memory?: MemoryWire;
   access?: AccessControlWire;
+  voice?: VoiceWire;
   cwd?: string;
 };
 
 /** 样式注入标记（幂等；版本变化时替换旧样式，避免客户端热更新后仍用旧样式） */
 const STYLE_ID = 'im-qqbot-config-panel-styles';
-const STYLE_VERSION = '3';
+const STYLE_VERSION = '6';
 
 /** DSW 通用设置风格（settings-form / Switch / SegmentedControl 原语复刻） */
 function useConfigPanelStyles(): void {
@@ -235,6 +271,11 @@ function useConfigPanelStyles(): void {
   color: var(--dsw-alias-label-secondary);
 }
 .imqb2-persona-add:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+/* 自定义音色行（名称 + 音色 id + 删除） */
+.imqb2-voice-row { display: flex; gap: 6px; align-items: center; }
+.imqb2-voice-row .imqb2-input { min-width: 0; }
+.imqb2-voice-name { flex: 0 0 140px; }
+.imqb2-voice-id { flex: 1 1 auto; }
 /* 分区 tab 栏（自动换行，选中态为浮起胶囊） */
 .imqb2-tabs {
   display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; margin: 2px 0 4px;
@@ -330,16 +371,100 @@ function SwitchRow({ label, help, checked, onChange }: {
 }
 
 /** 文本行（label 上 + 输入下，与官方 fields 布局一致） */
-function FieldRow({ label, help, value, placeholder, onChange }: {
-  label: string; help?: string; value: string; placeholder?: string; onChange: (next: string) => void;
+function FieldRow({ label, help, value, placeholder, type, onChange }: {
+  label: string; help?: string; value: string; placeholder?: string;
+  /** input 类型（如 password）；缺省 text */
+  type?: 'text' | 'password';
+  onChange: (next: string) => void;
 }): ReactNode {
   return createElement('div', { className: 'imqb2-field' },
     createElement('span', { className: 'imqb2-label' }, label),
     createElement('input', {
       className: 'imqb2-input', value, placeholder, spellCheck: false,
+      type: type ?? 'text', autoComplete: 'off',
       onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.currentTarget.value); },
     }),
     help === undefined ? null : createElement('p', { className: 'imqb2-hint' }, help),
+  );
+}
+
+/**
+ * 音色输入行（带系统音色下拉提示）
+ *
+ * 用 datalist 而不是 select：既能从预设里挑，也能直接粘贴声音复刻/声音设计的专属音色 id。
+ */
+function VoicePresetField({ label, value, placeholder, help, listId, options, onChange }: {
+  label: string; value: string; placeholder?: string; help?: ReactNode;
+  /** 预设为空时不下发 datalist */
+  listId: string; options: { value: string; label: string }[];
+  onChange: (next: string) => void;
+}): ReactNode {
+  return createElement('div', { className: 'imqb2-field' },
+    createElement('span', { className: 'imqb2-label' }, label),
+    createElement('input', {
+      className: 'imqb2-input', value, placeholder, spellCheck: false,
+      autoComplete: 'off', list: options.length > 0 ? listId : undefined,
+      onChange: (event: ChangeEvent<HTMLInputElement>) => { onChange(event.currentTarget.value); },
+    }),
+    options.length > 0
+      ? createElement('datalist', { id: listId },
+          options.map((option) => createElement('option', {
+            key: option.value, value: option.value, label: option.label,
+          })),
+        )
+      : null,
+    help === undefined ? null : createElement('p', { className: 'imqb2-hint' }, help),
+  );
+}
+
+/**
+ * 自定义音色编辑器：用户自己填「名称 + 音色 id」。
+ *
+ * 新增行插到数组头部，因此下拉里最新添加的音色排在最上面（在系统预设之前）。
+ */
+function VoicePresetListField({ value, onChange }: {
+  value: VoicePresetEntryWire[]; onChange: (next: VoicePresetEntryWire[]) => void;
+}): ReactNode {
+  const updateRow = (index: number, next: Partial<VoicePresetEntryWire>): void => {
+    onChange(value.map((row, i) => (i === index ? { ...row, ...next } : row)));
+  };
+  return createElement('div', { className: 'imqb2-field' },
+    createElement('span', { className: 'imqb2-label' }, '自定义音色'),
+    value.length === 0
+      ? createElement('p', { className: 'imqb2-hint' },
+          '还没有自定义音色。点击下方按钮新增，填名称 + 音色 id；新增项会排在音色下拉的最上方。')
+      : value.map((row, index) => createElement('div', {
+          key: `voice-preset-${index}`, className: 'imqb2-voice-row',
+        },
+          createElement('input', {
+            className: 'imqb2-input imqb2-voice-name', value: row.name ?? '',
+            placeholder: '名称（如 元气少女）', spellCheck: false, autoComplete: 'off',
+            onChange: (event: ChangeEvent<HTMLInputElement>) => {
+              updateRow(index, { name: event.currentTarget.value });
+            },
+          }),
+          createElement('input', {
+            className: 'imqb2-input imqb2-voice-id', value: row.voice ?? '',
+            placeholder: '音色 id（如 qwen-audio-3.0-tts-plus-vd-bailian-…）',
+            spellCheck: false, autoComplete: 'off',
+            onChange: (event: ChangeEvent<HTMLInputElement>) => {
+              updateRow(index, { voice: event.currentTarget.value });
+            },
+          }),
+          createElement('button', {
+            type: 'button', className: 'imqb2-chip-x',
+            'aria-label': `删除音色 ${(row.name ?? '').trim() || index + 1}`,
+            title: '删除这个音色',
+            onClick: () => { onChange(value.filter((_, i) => i !== index)); },
+          }, '×'),
+        )),
+    createElement('button', {
+      type: 'button', className: 'imqb2-persona-add',
+      onClick: () => { onChange([{ name: '', voice: '' }, ...value]); },
+    }, '＋ 添加音色'),
+    createElement('p', { className: 'imqb2-hint' },
+      '这里填的是你自己的声音复刻 / 声音设计音色 id（与账号和模型绑定），下拉里排在内置系统音色之前；'
+      + '留空的音色 id 保存时会被丢弃。'),
   );
 }
 
@@ -420,8 +545,10 @@ function ToolPicker({ selected, available, onChange }: {
  *
  * 收起态只占一行，人格多时面板不会被撑得过长。
  */
-function PersonaCard({ index, value, expanded, available, onChange, onToggle, onRemove }: {
+function PersonaCard({ index, value, expanded, available, voiceOptions, onChange, onToggle, onRemove }: {
   index: number; value: PersonaWire; expanded: boolean; available: string[];
+  /** 语音音色预设（与全局页签使用同一份清单） */
+  voiceOptions: { value: string; label: string }[];
   onChange: (next: Partial<PersonaWire>) => void; onToggle: () => void; onRemove: () => void;
 }): ReactNode {
   const title = value.name.trim() || value.id.trim() || `人格 ${index + 1}`;
@@ -429,11 +556,30 @@ function PersonaCard({ index, value, expanded, available, onChange, onToggle, on
   const kaomojiStyle = kaomojiEnabled
     ? (value.expressions?.kaomoji?.style?.trim() || 'daily')
     : '';
+  const voiceId = value.expressions?.voice?.voice?.trim() ?? '';
+  const voiceLabel = voiceOptionLabel(voiceOptions, voiceId);
   const subtitle = [
     value.id.trim(),
     value.tools === undefined ? undefined : `工具 ${value.tools.filter((t) => t.trim()).length}`,
     kaomojiEnabled ? `颜文字·${findKaomojiStyle(kaomojiStyle)?.name ?? kaomojiStyle}` : undefined,
+    voiceId !== '' ? `语音·${voiceLabel}` : undefined,
+    (value.expressions?.voice?.instruction ?? '').trim() !== '' ? '情感指令' : undefined,
   ].filter((part): part is string => part !== undefined).join(' · ');
+  const updatePersonaVoice = (next: Partial<PersonaVoiceWire>): void => {
+    const { voice: _removedVoice, ...restExpressions } = value.expressions ?? {};
+    const merged: PersonaVoiceWire = { ...value.expressions?.voice, ...next };
+    const nextVoice: PersonaVoiceWire = {};
+    if ((merged.voice ?? '').trim() !== '') nextVoice.voice = merged.voice;
+    if (merged.rate !== undefined) nextVoice.rate = merged.rate;
+    if (merged.volume !== undefined) nextVoice.volume = merged.volume;
+    const instruction = (merged.instruction ?? '').trim();
+    if (instruction !== '') nextVoice.instruction = instruction;
+    const hasVoice = Object.keys(nextVoice).length > 0;
+    const expressions = hasVoice
+      ? { ...restExpressions, voice: nextVoice }
+      : restExpressions;
+    onChange({ expressions: Object.keys(expressions).length > 0 ? expressions : undefined });
+  };
   return createElement('div', { className: 'imqb2-persona' },
     createElement('div', { className: 'imqb2-persona-head' },
       createElement('button', {
@@ -477,7 +623,12 @@ function PersonaCard({ index, value, expanded, available, onChange, onToggle, on
                 checked: kaomojiEnabled,
                 label: '颜文字',
                 onChange: (checked) => {
-                  if (!checked) { onChange({ expressions: undefined }); return; }
+                  if (!checked) {
+                    // 只移除 kaomoji，保留同一容器下的 voice（反之亦然）
+                    const { kaomoji: _kaomoji, ...rest } = value.expressions ?? {};
+                    onChange({ expressions: Object.keys(rest).length > 0 ? rest : undefined });
+                    return;
+                  }
                   const current = value.expressions?.kaomoji;
                   onChange({
                     expressions: {
@@ -518,6 +669,22 @@ function PersonaCard({ index, value, expanded, available, onChange, onToggle, on
             createElement('p', { className: 'imqb2-hint' },
               '开启后把该风格的颜文字清单写进 system prompt，模型按语境自然使用（默认一条回复最多 1 个），不需要工具调用。'),
           ),
+          createElement(VoicePresetField, {
+            label: '语音音色',
+            value: value.expressions?.voice?.voice ?? '',
+            placeholder: '留空继承全局音色（如 longanfengyue）',
+            listId: `imqb2-voice-presets-persona-${index}`,
+            options: voiceOptions,
+            help: '可从下拉里选系统音色或自定义音色，也可粘贴声音复刻/设计得到的专属音色 id；留空则继承全局音色。语音总开关在「语音回复」页签的 API Key。',
+            onChange: (nextVoiceId) => { updatePersonaVoice({ voice: nextVoiceId }); },
+          }),
+          createElement(FieldRow, {
+            label: '语音情感/语气（可选）',
+            value: value.expressions?.voice?.instruction ?? '',
+            placeholder: '如：用清冷、克制的语气，语速稍慢',
+            help: '自然语言指令，合成时随请求下发；留空继承全局「情感/语气指令」。qwen-audio-3.0-tts-plus/flash 支持。',
+            onChange: (next) => { updatePersonaVoice({ instruction: next }); },
+          }),
           createElement('div', { className: 'imqb2-head' },
             createElement('span', { className: 'imqb2-label' }, '限制可用工具'),
             createElement(Switch, {
@@ -557,7 +724,7 @@ const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
 ];
 
 /** 配置分区：每页只展示一组相关配置，避免单列过长 */
-type TabId = 'access' | 'identity' | 'memory' | 'conversation' | 'model' | 'personas';
+type TabId = 'access' | 'identity' | 'memory' | 'conversation' | 'voice' | 'model' | 'personas';
 
 interface TabDef {
   id: TabId;
@@ -574,6 +741,7 @@ const TABS: ReadonlyArray<TabDef> = [
     id: 'conversation', label: '对话设置',
     keys: ['requireMention', 'streaming', 'replySplitMode', 'replySplitIntervalMs', 'showToolResults'],
   },
+  { id: 'voice', label: '语音回复', keys: ['voice'] },
   { id: 'model', label: '模型与提示词', keys: ['provider', 'model', 'preset', 'globalPrompt'] },
   { id: 'personas', label: '人格预设', keys: ['personas', 'defaultPersona'] },
 ];
@@ -669,10 +837,33 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
         ...(p.tools !== undefined
           ? { tools: [...new Set(p.tools.map((t) => t.trim()).filter(Boolean))] }
           : {}),
+        // 表达方式（颜文字 / 语音音色）：不提交会被服务端整体替换掉
+        ...(p.expressions !== undefined ? { expressions: p.expressions } : {}),
       }));
     }
     if (changed.defaultPersona !== undefined) {
       changed.defaultPersona = String(changed.defaultPersona).trim();
+    }
+
+    // 语音配置：hasApiKey 只读提示不透传；空 apiKey = 保持已保存的 Key；
+    // 字数/超时收敛到服务端允许的范围
+    if (changed.voice !== undefined) {
+      const v = changed.voice as VoiceWire;
+      const { hasApiKey: _hasApiKey, ...rest } = v;
+      const maxChars = Math.round(Number(rest.maxChars));
+      const timeoutMs = Math.round(Number(rest.timeoutMs));
+      // 自定义音色：去空白、丢弃没有音色 id 的行（顺序保持 = 下拉顺序，新增项在最前）
+      const presets = (rest.presets ?? [])
+        .map((entry) => ({ name: (entry.name ?? '').trim(), voice: (entry.voice ?? '').trim() }))
+        .filter((entry) => entry.voice !== '');
+      changed.voice = {
+        ...rest,
+        apiKey: (rest.apiKey ?? '').trim(),
+        instruction: (rest.instruction ?? '').trim(),
+        presets,
+        maxChars: Number.isFinite(maxChars) ? Math.min(1000, Math.max(20, maxChars)) : 300,
+        timeoutMs: Number.isFinite(timeoutMs) ? Math.min(120000, Math.max(5000, timeoutMs)) : 30000,
+      };
     }
 
     // 记忆配置：maxNotes 收敛到 1–100 的整数
@@ -696,7 +887,20 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
         const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; error?: string };
         if (res.ok && body.ok === true) {
           setResult({ ok: true, message: body.message ?? '配置已保存，插件将自动重载' });
-          setInitial(form);
+          // 语音 Key 不留在客户端内存里：保存成功后清空输入框，只保留 hasApiKey 提示
+          let nextForm = form;
+          if (changed.voice !== undefined) {
+            const submitted = changed.voice as VoiceWire;
+            const hasKey = submitted.clearApiKey === true
+              ? false
+              : (submitted.apiKey ?? '').trim() !== '' || form.voice?.hasApiKey === true;
+            nextForm = {
+              ...form,
+              voice: { ...form.voice, apiKey: '', clearApiKey: false, hasApiKey: hasKey },
+            };
+            setForm(nextForm);
+          }
+          setInitial(nextForm);
           return;
         }
         setResult({ ok: false, message: body.error ?? `保存失败（HTTP ${res.status}）` });
@@ -724,6 +928,11 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const memory: MemoryWire = form.memory
     ?? { enabled: true, autoCapture: true, maxNotes: 20 };
   const personas = form.personas ?? [];
+  // 语音配置：GET 只回 hasApiKey（Key 永远不回显）
+  const voice: VoiceWire = form.voice ?? {};
+  // 音色下拉候选：用户自定义音色在最上，内置系统音色在后（模型与预设不匹配时只剩自定义项）
+  const voiceOptions = buildVoiceOptions(voice.presets, voice.model);
+  const customPresetCount = (voice.presets ?? []).filter((entry) => (entry.voice ?? '').trim() !== '').length;
 
   // 工具下拉候选：只保留插件内置工具（做题/看图/发文件 + 翻译/总结/讲解/改写）。
   // 宿主 preset 的文件读写、命令执行等能力不进候选；已配置的旧名字仍以 chip
@@ -888,7 +1097,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }),
     createElement(SegmentedRow, {
       label: '回复拆分', value: form.replySplitMode ?? 'none', options: SPLIT_OPTIONS,
-      help: '推荐「约定分隔符」：模型输出固定分隔符 ||| 时才拆条，正文换行不会拆；开启后自动关闭流式输出',
+      help: '推荐「约定分隔符」：模型输出固定分隔符 ||| 时拆条；只要出现分隔符，段内剩余换行也会拆（模型偶尔把分隔符敲成换行），没出现分隔符时换行不拆；开启后自动关闭流式输出',
       onChange: (v) => { patch('replySplitMode', v as ReplySplitMode); },
     }),
     form.replySplitMode === 'delimiter'
@@ -912,6 +1121,94 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       help: '在聊天中展示 agent 工具调用的结构化结果',
       onChange: (v) => { patch('showToolResults', v); },
     }),
+  ];
+
+  const voicePanel: ReactNode[] = [
+    createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 8px' } },
+      voice.hasApiKey === true
+        ? '语音功能已启用：由模型判断这一轮要不要发语音。需要语音时会调用 qqbot_voice，'
+          + '本轮回复只发语音、不再重复发文字；合成失败或内容不适合朗读时退回文字。'
+        : '语音功能未启用：填写 API Key 并保存后生效。留空即完全关闭（不注册语音工具、不合成、不发语音、不消耗额度）。'),
+    createElement(FieldRow, {
+      label: 'DashScope API Key', type: 'password',
+      value: voice.apiKey ?? '',
+      placeholder: voice.hasApiKey === true ? '已保存（输入新 Key 可替换）' : '留空则不启用语音',
+      help: '已保存的 Key 不会回显；留空提交表示保持现有 Key，「清除已保存的 Key」才会真正关闭语音。',
+      onChange: (v) => { patch('voice', { ...voice, apiKey: v }); },
+    }),
+    voice.hasApiKey === true && (voice.apiKey ?? '').trim() === ''
+      ? createElement('div', { className: 'imqb2-field', style: { padding: '0 0 8px', borderTop: 0 } },
+          createElement('div', { className: 'imqb2-head' },
+            createElement('span', { className: 'imqb2-hint' }, '已保存 API Key，语音功能处于启用状态。'),
+            createElement('button', {
+              type: 'button', className: 'imqb2-persona-add',
+              onClick: () => { patch('voice', { ...voice, apiKey: '', clearApiKey: true, hasApiKey: false }); },
+            }, '清除已保存的 Key'),
+          ),
+        )
+      : null,
+    createElement('div', { className: 'imqb2-group-title' }, '模型与音色'),
+    createElement(FieldRow, {
+      label: '语音模型', value: voice.model ?? '', placeholder: 'qwen-audio-3.0-tts-flash',
+      help: 'DashScope 语音合成模型 id（需在百炼控制台开通；如 cosyvoice-v2）',
+      onChange: (v) => { patch('voice', { ...voice, model: v }); },
+    }),
+    createElement(VoicePresetField, {
+      label: '默认音色',
+      value: voice.voice ?? '',
+      placeholder: 'longanfengyue（龙安风悦）',
+      listId: 'imqb2-voice-presets-global',
+      options: voiceOptions,
+      help: voiceOptions.length > 0
+        ? `下拉可选 ${voiceOptions.length} 个音色（自定义 ${customPresetCount} 个在最前，其后为内置系统音色）；也可直接粘贴专属音色 id。人格可在「人格预设」里覆盖。`
+        : '暂无可用音色清单：在下面「自定义音色」里添加，或手动填写该模型支持的音色 id。人格可在「人格预设」里覆盖。',
+      onChange: (v) => { patch('voice', { ...voice, voice: v }); },
+    }),
+    createElement(VoicePresetListField, {
+      value: voice.presets ?? [],
+      onChange: (nextPresets) => { patch('voice', { ...voice, presets: nextPresets }); },
+    }),
+    createElement('div', { className: 'imqb2-group-title' }, '情感与语气'),
+    createElement(AreaRow, {
+      label: '情感/语气指令', rows: 2,
+      help: '用自然语言描述语速、情绪与说话方式，合成时随请求下发（≤200 字）。例：请用清冷、平静、略带疏离的语气，语速稍慢。留空 = 模型默认语气；人格可在「人格预设」里单独覆盖。',
+      value: voice.instruction ?? '',
+      onChange: (v) => { patch('voice', { ...voice, instruction: v }); },
+    }),
+    createElement('p', { className: 'imqb2-hint' },
+      '服务端还支持文本内情感标签（[excited] 兴奋、[sad] 悲伤、[serious] 严肃、[laughing] 笑声、'
+      + '[sighing] 叹息、[whispers] 耳语、[very slowly] 放慢…），但标签必须出现在待朗读文本里才生效，'
+      + '日常建议用上面的指令控制情感，必要时模型还可以在单轮调用里指定语气。'),
+    createElement('div', { className: 'imqb2-group-title' }, '长度与超时'),
+    createElement(FieldRow, {
+      label: '单次朗读字数上限', value: String(voice.maxChars ?? 300), placeholder: '300',
+      help: '超出后截断（20–1000）；QQ 语音不宜过长',
+      onChange: (v) => {
+        const n = Math.round(Number(v));
+        patch('voice', { ...voice, maxChars: Number.isFinite(n) ? Math.min(1000, Math.max(20, n)) : 300 });
+      },
+    }),
+    createElement(FieldRow, {
+      label: '合成超时(ms)', value: String(voice.timeoutMs ?? 30000), placeholder: '30000',
+      help: '超时后放弃语音、改为发送文字回复（5000–120000）',
+      onChange: (v) => {
+        const n = Math.round(Number(v));
+        patch('voice', { ...voice, timeoutMs: Number.isFinite(n) ? Math.min(120000, Math.max(5000, n)) : 30000 });
+      },
+    }),
+    createElement('div', { className: 'imqb2-group-title' }, '网关'),
+    createElement(FieldRow, {
+      label: 'WebSocket 地址', value: voice.baseUrl ?? '', placeholder: '留空使用 DashScope 官方网关',
+      help: '自定义 MaaS 网关时填完整 wss:// 地址；留空则按 workspace 或官方网关连接',
+      onChange: (v) => { patch('voice', { ...voice, baseUrl: v }); },
+    }),
+    createElement(FieldRow, {
+      label: '业务空间 workspace', value: voice.workspace ?? '', placeholder: '留空使用官方共享网关',
+      help: '百炼业务空间 id：用于拼接 MaaS 地址并在请求头携带 X-DashScope-WorkSpace',
+      onChange: (v) => { patch('voice', { ...voice, workspace: v }); },
+    }),
+    createElement('p', { className: 'imqb2-hint', style: { padding: '8px 0 0' } },
+      '语音走 DashScope 实时合成（需要 Node 22+ 内置 WebSocket）；合成失败时退回文字回复，消息不会丢。'),
   ];
 
   const modelPanel: ReactNode[] = [
@@ -959,6 +1256,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       value: persona,
       expanded: expandedPersonas.has(index),
       available: toolCandidates,
+      voiceOptions,
       onChange: (next) => { updatePersona(index, next); },
       onToggle: () => { togglePersona(index); },
       onRemove: () => { removePersona(index); },
@@ -981,6 +1279,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     identity: identityPanel,
     memory: memoryPanel,
     conversation: conversationPanel,
+    voice: voicePanel,
     model: modelPanel,
     personas: personasPanel,
   };

@@ -116,9 +116,10 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `globalPrompt` | string | `''` | 全局 system prompt：对所有群聊/私聊生效（多条消息拆分规则建议写在这里） |
 | `personas` | array | `[]` | 人格预设列表（QQ 端 `/persona` 切换，可配置 `tools` 工具白名单），见下文 |
 | `defaultPersona` | string | `''` | 默认人格 id，留空表示不启用人格 |
+| `voice` | object | 见下文 | 出站语音（TTS）：**`apiKey` 留空即关闭语音功能**，见下文 |
 | `textChunkLimit` | number | `4500` | 单条消息最大字符数 |
 | `streaming` | boolean | `true` | 是否启用流式输出（群聊始终不启用） |
-| `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | 回复拆分方式：`delimiter` 只在固定分隔符 `|||` 处拆（推荐），`none` 只按长度切分，`line` 每个换行发一条，`paragraph` 按空行分段。开启后自动关闭流式输出 |
+| `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | 回复拆分方式：`delimiter` 按固定分隔符 `|||` 拆（推荐；只要出现分隔符，段内剩余换行也按分条处理），`none` 只按长度切分，`line` 每个换行发一条，`paragraph` 按空行分段。开启后自动关闭流式输出 |
 | `replySplitIntervalMs` | number | `0` | 拆分后相邻消息的间隔(ms)，`0` 表示立即顺序发送；遇到平台限流可调大 |
 | `sessionIdleTimeout` | number | `1800000` | 会话闲置超时(ms)，默认 30 分钟 |
 | `processingTimeoutMs` | number | `1800000` | 处理超时(ms)，超时中断当前 LLM 调用 |
@@ -128,7 +129,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `showToolResults` | boolean | `false` | 是否展示工具调用成功结果（错误始终展示） |
 | `debug` | boolean | `false` | 调试模式 |
 
-> 拆分说明：推荐 `replySplitMode: delimiter`，分隔符固定为 `|||`（不可配置），模型只在 `|||` 处拆条，正文换行不会触发多条消息；代码块内的分隔符不拆，整体一条。同一 `msg_id` 最多支持 4 次被动回复，超出部分自动降级为主动推送。
+> 拆分说明：推荐 `replySplitMode: delimiter`，分隔符固定为 `|||`（不可配置）。没有分隔符时正文换行不会触发多条消息；一旦出现分隔符，段内剩余的换行也会按分条处理（模型偶尔把 `|||` 敲成换行，留着会在气泡里夹断行）。代码块与连续表格行不拆，整体一条。同一 `msg_id` 最多支持 4 次被动回复，超出部分自动降级为主动推送。
 
 ### 全局提示词（globalPrompt）
 
@@ -179,18 +180,93 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
   - `maxPerReply`：一条回复最多用几个颜文字（1–3，缺省 1）。
   - `custom`：自定义补充颜文字（最多 20 条，每条 ≤32 字），排在预设清单之后供模型挑选。
   - 颜文字库在 `src/expressions/kaomoji.ts`，按情绪分组；后续表情包（图片）会在同一 `expressions` 容器下新增 `sticker`，人格配置形态不变。
+- `expressions.voice`：**该人格的语音音色**（可选）。`voice` 覆盖全局音色，`rate`（0.5–2）与 `volume`（0–100）可选，`instruction` 覆盖全局情感/语气指令（留空继承全局）；语音功能本身由全局 `voice.apiKey` 控制，留空时这里配置也不生效。示例：`expressions: { voice: { voice: longanfengyue, rate: 1.1, instruction: 请用清冷克制的语气 } }`。
 - **工具权限是硬约束，不是提示词**：QQ 会话在运行时通过 `tools.restrict({ allow })` 限制模型可见的工具，白名单之外的工具模型根本看不到、调不到（宿主 preset 里的文件读写、命令执行、子 agent、定时任务等一律被挡掉）。
   - 不写 `tools`（缺省）：使用**默认放行清单**——7 个插件内置工具（`qqbot_solve`、`qqbot_describe_image`、`qqbot_send_file`、`qqbot_translate`、`qqbot_summarize`、`qqbot_explain`、`qqbot_rewrite`）+ `ask_user_question` + 只读的 `web_search` / `web_fetch`。
   - `tools: []`：该人格没有任何工具能力（不能做题、看图、发文件、翻译/总结，也不能联网）。
   - 人格写的 `tools` 与默认清单**求交**：默认清单之外的名字（如 `read`、`write`、`pwsh`、`bash`）不会生效，日志会告警「配置了默认不开放的工具（已禁用）」；未注册的名字会被忽略。
+  - 例外：语音启用时 `qqbot_voice` 始终放行（语音是投递方式而不是一项能力），即使人格写了 `tools: []` 也能用语音回复。
   - 切换人格后工具权限**立即重新绑定**，无需 `/new`；`/tools` 可查看当前人格的绑定（仅管理员，诊断用，不在命令菜单中展示）。
   - 日常绑定建议在设置面板里做：展开人格卡片 → 开启「限制可用工具」→ 从下拉里逐个选择（候选只有插件内置工具，已选的显示为可删除的标签）。
 - **人格按会话隔离**：群聊按群 ID、私聊按用户 ID 分别记录，同一个群里切人格不会影响其他群或其他私聊。
 - 生效优先级：本会话 `/persona <id>` 选择 > `defaultPersona`；都没有则不启用人格（仅保留 `globalPrompt`）。
-- 注入顺序：`globalPrompt`（order 80）→ 身份说明（order 82，配置了 `identity` 时）→ 人格 prompt（order 85）→ 工具权限说明（order 86，配置了 `tools` 时）→ 记忆与关系（order 87，开启 `memory` 时）；人格只描述「是谁」，拆条等通用规则统一写在 `globalPrompt`。
+- 注入顺序：`globalPrompt`（order 80）→ 身份说明（order 82，配置了 `identity` 时）→ 人格 prompt（order 85）→ 工具权限说明（order 86，配置了 `tools` 时）→ 记忆与关系（order 87，开启 `memory` 时）→ 语音回复说明（order 88，开启语音时）；人格只描述「是谁」，拆条等通用规则统一写在 `globalPrompt`。
 - 人格在每次构建 system prompt 时注入，切换后**下一条消息**即生效，无需 `/new`。
 - 多条消息统一用固定分隔符 `|||`，并配合 `replySplitMode: delimiter`；人格 prompt 里无需重复约定。
 - 也可以在 dsh 设置面板的「人格预设」页签里增删改（卡片默认收起，点击展开编辑），保存后自动重载。
+
+### 语音回复（voice）
+
+把回复「说给用户听」：基于 DashScope 实时语音合成（WebSocket）。**是否需要发语音由上层模型判断**——模型需要时会调用 `qqbot_voice` 工具，本轮回复正文直接合成为 QQ 语音，**不再重复发一条相同的文字**；合成失败或内容不适合朗读时自动退回文字。**`voice.apiKey` 为空时语音功能完全关闭**——不注册工具、不合成、不发语音，也不消耗任何额度。
+
+```yaml
+- id: im-qqbot
+  config:
+    voice:
+      apiKey: ''                        # 留空 = 关闭语音；填入百炼 API Key 后生效
+      model: qwen-audio-3.0-tts-flash   # 语音合成模型（也可用 cosyvoice-v2 等）
+      voice: longanfengyue              # 默认音色
+      instruction: 请用清冷、克制的语气，语速稍慢   # 情感/语气指令（自然语言，可选）
+      presets:                          # 自定义音色（下拉里排在内置系统音色之前）
+        - name: 元气少女
+          voice: qwen-audio-3.0-tts-plus-vd-bailian-85212a2f84dc4f55ba9cddc8fef8be1c
+      maxChars: 300                     # 单次朗读字数上限（20–1000）
+      timeoutMs: 30000                  # 合成超时(ms)（5000–120000）
+      # baseUrl: wss://xxx/api-ws/v1/inference   # 自定义 MaaS 网关（可选）
+      # workspace: xxx                          # 百炼业务空间 id（可选）
+```
+
+| 配置 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `voice.apiKey` | string | `''` | DashScope API Key；**留空 = 关闭语音**（面板保存时留空表示保持已保存的 Key，需点「清除已保存的 Key」才真正关闭） |
+| `voice.model` | string | `qwen-audio-3.0-tts-flash` | 语音合成模型 id，需在百炼控制台开通对应模型 |
+| `voice.voice` | string | `longanfengyue` | 默认音色 id；人格可用 `expressions.voice.voice` 覆盖 |
+| `voice.instruction` | string | `''` | 情感/语气指令（自然语言，≤200 字）：语速、情绪、说话方式；人格可用 `expressions.voice.instruction` 覆盖 |
+| `voice.presets` | array | `[]` | 自定义音色清单（`{ name, voice }`，≤20 条）；面板下拉里**排在内置系统音色之前**，后加的排在更上方 |
+| `voice.baseUrl` | string | `''` | 自定义 WebSocket 地址（`ws://` / `wss://`）；留空按 workspace 或官方网关连接 |
+| `voice.workspace` | string | `''` | 百炼业务空间 id（拼 MaaS 地址并在请求头带 `X-DashScope-WorkSpace`） |
+| `voice.maxChars` | number | `300` | 单次朗读的最大字数，超出截断 |
+| `voice.timeoutMs` | number | `30000` | 合成超时，超时放弃语音、改为发送文字回复 |
+
+- **模型决定、语音替换文字**：语音启用时会给模型注入一段「语音回复」说明（order 88），模型判断需要语音（「说句话」「发条语音」「想听你说话」「唱首歌」、晚安安慰撒娇这类短句）就调用 `qqbot_voice`，随后写的回复正文只用于合成，不再作为文字消息发送——不会出现「先发文字又发一遍语音」。
+- **失败自动退回文字**：鉴权失败、模型未开通、网络超时或清洗后没有可朗读内容时，本轮改发原来的文字，消息不会丢；临时音频写入 `~/.dsh-qqbot/media` 并在发送后删除。
+- **按人格音色**：`personas[].expressions.voice` 可覆盖全局音色、语速/音量与情感指令，切换人格后下一条语音即生效；模型还可在单轮调用里指定语气（如「带点笑意」），仅本轮生效。
+- **自动清洗**：代码块、URL、Markdown 符号、`|||` 分隔符与颜文字不会念出来。
+- **运行时要求**：使用 Node 22+ 内置 WebSocket；Node 20 环境即使填了 Key 也会在启动日志里告警并关闭语音。
+- 设置面板「语音回复」页签可编辑以上字段；已保存的 API Key **永不回显**，只显示「已保存」状态。
+
+#### 内置音色预设（`qwen-audio-3.0-tts-flash`）
+
+设置面板的「默认音色」与人格卡片的「语音音色」输入框都带下拉提示，可直接选下面的系统音色（以下 id 均已实测可用）：
+
+| 名称 | 音色 id | 特质 |
+|------|---------|------|
+| 龙安风悦 | `longanfengyue` | 自然亲切音（女·30岁） |
+| 龙安元妃 | `longanyuanfei` | 高傲妃子音（女·30岁） |
+| 龙安灵希 | `longanlingxi` | 可爱甜美音（女·25岁） |
+| 龙安小昕 | `longanxiaoxin` | 亲切活泼音（女·22岁） |
+| 龙安欢 | `longanhuan_v3.6` | 活泼女声（女·25岁） |
+| 龙杰力豆 | `longjielidou_v3.6` | 天真男童（男·5岁） |
+| 龙泡泡 | `longpaopao_v3.6` | 软糯可爱音（女·5岁） |
+| 龙火火 | `longhuohuo_v3.6` | 顽皮少年音（男·8岁） |
+| 龙川叔 | `longchuanshu_v3.6` | 川普大叔音（男·40岁） |
+| Loong Mary | `loongmary` | 温暖英音（女·20岁，英文） |
+| Loong John | `loongjohn` | 沉稳亲切美音（男·28岁，英文） |
+| Loong Eva | `loongeva_v3.6` | 高智美音（女·28岁，英文） |
+
+- 预设只对 `qwen-audio-3.0-tts-flash` 生效；把 `voice.model` 换成 `cosyvoice-v2` 等模型时下拉清单为空，需要手填该模型支持的音色 id。
+- 声音复刻/声音设计的专属音色 id（形如 `qwen-audio-3.0-tts-plus-vd-bailian-<哈希>`）可直接粘贴到输入框，不要求出现在预设清单里；同一后缀在 plus / flash 间共享。
+
+#### 自定义音色与情感控制
+
+- **手动新增音色**：设置面板「语音回复」页签 →「自定义音色」点「＋ 添加音色」，填名称 + 音色 id 即可（也可直接写进 `voice.presets`）。**新增项插在清单最上方**，所以音色下拉里最新添加的排在最前、内置系统音色排在最后；名称留空时用 id 兜底，音色 id 留空的行保存时丢弃（最多 20 条）。
+- **情感/语气（instruction）**：`voice.instruction` 用一句自然语言描述语速、情绪与说话方式（≤200 字），合成时随 `run-task` 的 `parameters.instruction` 下发；人格可用 `personas[].expressions.voice.instruction` 单独覆盖，留空继承全局。示例：
+  - 清冷学姐：`请用清冷、平静、略带疏离的语气，语速稍慢，情绪克制`
+  - 元气少女：`请用元气满满、轻快、带笑意的语气，语速稍快，句尾上扬`
+  - 女仆：`请用恭敬、轻柔、温和的语气，语速平缓，带一点体贴的笑意`
+  - 御姐：`请用成熟、慵懒、略带温柔的语调，语速稍慢，气息柔和`
+- **文本内情感标签**（服务端能力，`qwen-audio-3.0-tts-plus / flash` 支持）：`[excited]` 兴奋、`[sad]` 悲伤、`[serious]` 严肃、`[laughing]` 笑声、`[sighing]` 叹息、`[whispers]` 耳语、`[very slowly]` / `[very fast]` 放慢/加快。**只有白名单里的这几种标签会被原样送进 TTS**（其它方括号内容一律当注释丢掉，避免把 `[pause:1s]` 这类东西念出来）；日常情感控制仍建议优先用 `instruction`（或让模型在单轮调用里指定语气），标签用在“一句话里逐句变情绪”的场合。
+- **正文按「台词本」处理**：合成前会清洗回复正文——`|||` 当句间停顿（换成逗号）、换行合并成一句、括号/方尖括号/星号里的舞台指示（`（小声）`、`【突然】`、`*叹气*`）整段丢弃，代码块、URL、Markdown、颜文字一并去掉，再按 `maxChars` 截断（截断处不会切坏情感标签）。
 
 ### 身份与权限（identity）
 

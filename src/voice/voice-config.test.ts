@@ -1,0 +1,190 @@
+import { describe, expect, it } from 'vitest';
+import {
+  cleanTextForSpeech,
+  normalizeVoiceInstruction,
+  resolveVoiceSettings,
+  resolveVoiceTuning,
+} from './voice-config.ts';
+import { MAX_VOICE_INSTRUCTION_LEN, type VoiceConfig } from '../config.ts';
+
+function voiceConfig(overrides: Partial<VoiceConfig> = {}): VoiceConfig {
+  return {
+    apiKey: 'sk-test',
+    model: 'qwen-audio-3.0-tts-flash',
+    voice: 'longanfengyue',
+    instruction: '',
+    presets: [],
+    baseUrl: '',
+    workspace: '',
+    maxChars: 300,
+    timeoutMs: 30000,
+    ...overrides,
+  };
+}
+
+describe('resolveVoiceSettings（apiKey 门控）', () => {
+  it('apiKey 为空（含纯空白）时返回 undefined：语音功能关闭', () => {
+    expect(resolveVoiceSettings(undefined)).toBeUndefined();
+    expect(resolveVoiceSettings(voiceConfig({ apiKey: '' }))).toBeUndefined();
+    expect(resolveVoiceSettings(voiceConfig({ apiKey: '   ' }))).toBeUndefined();
+  });
+
+  it('apiKey 非空时去空白并回落到缺省模型/音色', () => {
+    const settings = resolveVoiceSettings(voiceConfig({
+      apiKey: '  sk-test  ',
+      model: '',
+      voice: '  ',
+      baseUrl: '  ',
+      workspace: '  ',
+    }));
+    expect(settings).toEqual({
+      apiKey: 'sk-test',
+      model: 'qwen-audio-3.0-tts-flash',
+      voice: 'longanfengyue',
+      maxChars: 300,
+      timeoutMs: 30000,
+    });
+  });
+
+  it('字数与超时收敛到合法范围，非法数值回落缺省', () => {
+    expect(resolveVoiceSettings(voiceConfig({ maxChars: 5, timeoutMs: 100 }))).toMatchObject({
+      maxChars: 20,
+      timeoutMs: 5000,
+    });
+    expect(resolveVoiceSettings(voiceConfig({ maxChars: 5000, timeoutMs: 999999 }))).toMatchObject({
+      maxChars: 1000,
+      timeoutMs: 120000,
+    });
+    expect(resolveVoiceSettings(voiceConfig({
+      maxChars: Number.NaN, timeoutMs: Number.NaN,
+    }))).toMatchObject({ maxChars: 300, timeoutMs: 30000 });
+  });
+});
+
+describe('normalizeVoiceInstruction（情感指令）', () => {
+  it('折叠换行与多余空白，去掉首尾空白', () => {
+    expect(normalizeVoiceInstruction('  请用清冷、平静的语气\n\n语速稍慢  ')).toBe('请用清冷、平静的语气 语速稍慢');
+    expect(normalizeVoiceInstruction('用 元气满满 的语气')).toBe('用 元气满满 的语气');
+  });
+
+  it('空值/非字符串/纯空白返回 undefined（不下发 instruction）', () => {
+    expect(normalizeVoiceInstruction('')).toBeUndefined();
+    expect(normalizeVoiceInstruction('   \n ')).toBeUndefined();
+    expect(normalizeVoiceInstruction(undefined)).toBeUndefined();
+    expect(normalizeVoiceInstruction(123)).toBeUndefined();
+  });
+
+  it('超长时截断到上限且不留尾随空白', () => {
+    const long = `${'柔'.repeat(MAX_VOICE_INSTRUCTION_LEN)}  多余`;
+    const normalized = normalizeVoiceInstruction(long);
+    expect(normalized).toBe('柔'.repeat(MAX_VOICE_INSTRUCTION_LEN));
+  });
+});
+
+describe('resolveVoiceSettings（情感指令透出）', () => {
+  it('配置了 instruction 时规范化后随设置返回', () => {
+    const settings = resolveVoiceSettings(voiceConfig({
+      instruction: ' 请用清冷\n克制的语气，语速稍慢 ',
+    }));
+    expect(settings?.instruction).toBe('请用清冷 克制的语气，语速稍慢');
+  });
+
+  it('未配置 instruction 时设置里不带该字段', () => {
+    expect(resolveVoiceSettings(voiceConfig())?.instruction).toBeUndefined();
+    expect(resolveVoiceSettings(voiceConfig({ instruction: '   ' }))?.instruction).toBeUndefined();
+  });
+});
+
+describe('resolveVoiceTuning', () => {
+  const settings = resolveVoiceSettings(voiceConfig())!;
+
+  it('未配置人格音色时使用全局音色', () => {
+    expect(resolveVoiceTuning(settings)).toEqual({ voice: 'longanfengyue' });
+    expect(resolveVoiceTuning(settings, {})).toEqual({ voice: 'longanfengyue' });
+    expect(resolveVoiceTuning(settings, { voice: '   ' })).toEqual({ voice: 'longanfengyue' });
+  });
+
+  it('人格音色覆盖全局音色，语速/音量收敛并随参数透出', () => {
+    expect(resolveVoiceTuning(settings, { voice: 'longxiaochun_v2', rate: 1.2, volume: 60 })).toEqual({
+      voice: 'longxiaochun_v2',
+      rate: 1.2,
+      volume: 60,
+    });
+    expect(resolveVoiceTuning(settings, { rate: 5, volume: 101 })).toEqual({
+      voice: 'longanfengyue',
+      rate: 2,
+      volume: 100,
+    });
+  });
+
+  it('情感指令：人格覆盖全局，人格留空则沿用全局', () => {
+    const withInstruction = resolveVoiceSettings(voiceConfig({
+      instruction: '请用元气满满、语速稍快的语气',
+    }))!;
+    expect(resolveVoiceTuning(withInstruction)).toEqual({
+      voice: 'longanfengyue',
+      instruction: '请用元气满满、语速稍快的语气',
+    });
+    expect(resolveVoiceTuning(withInstruction, { instruction: '  ' })).toEqual({
+      voice: 'longanfengyue',
+      instruction: '请用元气满满、语速稍快的语气',
+    });
+    expect(resolveVoiceTuning(withInstruction, { instruction: '用清冷、克制的语气' })).toEqual({
+      voice: 'longanfengyue',
+      instruction: '用清冷、克制的语气',
+    });
+  });
+});
+
+describe('cleanTextForSpeech', () => {
+  it('去掉分隔符/代码块/URL/Markdown 与颜文字，||| 变成停顿', () => {
+    const text = [
+      '真的假的|||你别骗我',
+      '```ts',
+      'const a = 1',
+      '```',
+      '看这个 https://example.com/a',
+      '(｡•́︿•̀｡) 好耶',
+    ].join('\n');
+    expect(cleanTextForSpeech(text, 300)).toBe('真的假的，你别骗我 看这个 好耶');
+  });
+
+  it('舞台指示不念：括号动作、方括号情绪标签、星号动作整段剔除', () => {
+    expect(cleanTextForSpeech('（小声）别闹，我有点困了', 300)).toBe('别闹，我有点困了');
+    expect(cleanTextForSpeech('【突然】你吓我一跳', 300)).toBe('你吓我一跳');
+    expect(cleanTextForSpeech('*叹气* 好吧，我陪你说会儿话', 300)).toBe('好吧，我陪你说会儿话');
+    expect(cleanTextForSpeech('乖，别哭（摸摸头）（笑）', 300)).toBe('乖，别哭');
+  });
+
+  it('语音不按气泡念：换行合并成一句', () => {
+    expect(cleanTextForSpeech('晚安\n早点睡\n明天见', 300)).toBe('晚安 早点睡 明天见');
+  });
+
+  it('白名单情感标签保留给 TTS；其它方括号标记整体丢弃', () => {
+    expect(cleanTextForSpeech('别闹[whispers]快睡', 300)).toBe('别闹[whispers]快睡');
+    expect(cleanTextForSpeech('[excited]真的假的|||你别骗我', 300)).toBe('[excited]真的假的，你别骗我');
+    // 非白名单标签不念（否则会念出 pause:1s / 突然）
+    expect(cleanTextForSpeech('你吓我一跳[pause:1s]', 300)).toBe('你吓我一跳');
+  });
+
+  it('截断不会切坏情感标签', () => {
+    expect(cleanTextForSpeech('晚安晚安晚安晚安晚安晚安[whispers]', 20)).toBe('晚安晚安晚安晚安晚安晚安');
+    expect(cleanTextForSpeech('一二三四五六七八九十一二三四五六七八九十[whispers]好梦', 25))
+      .toBe('一二三四五六七八九十一二三四五六七八九十');
+  });
+
+  it('超出上限时截断，且不留尾随空白', () => {
+    const text = '一'.repeat(50);
+    expect(cleanTextForSpeech(text, 20)).toBe('一'.repeat(20));
+  });
+
+  it('只有符号/颜文字时返回空字符串（本轮不朗读）', () => {
+    expect(cleanTextForSpeech('(｡•́︿•̀｡) ||| *** ###', 300)).toBe('');
+    expect(cleanTextForSpeech('   ', 300)).toBe('');
+    expect(cleanTextForSpeech('', 300)).toBe('');
+  });
+
+  it('保留正常标点并折叠空白', () => {
+    expect(cleanTextForSpeech('你好，世界！\n\n  今天过得怎么样？', 300)).toBe('你好，世界！ 今天过得怎么样？');
+  });
+});

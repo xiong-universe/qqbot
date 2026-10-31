@@ -613,6 +613,244 @@ describe('bind-routes', () => {
     expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('布尔') });
   });
 
+  it('GET config：语音 API Key 永不回显，只返回 hasApiKey', async () => {
+    const { routes } = createHarness({
+      currentConfig: () => ({
+        requireMention: true,
+        voice: {
+          apiKey: 'sk-secret', model: 'cosyvoice-v2', voice: 'longxiaochun_v2',
+          baseUrl: '', workspace: '', maxChars: 300, timeoutMs: 30000,
+        },
+      }),
+    });
+    const res = fakeRes();
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), res);
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toEqual({
+      config: {
+        requireMention: true,
+        voice: {
+          apiKey: '', hasApiKey: true, model: 'cosyvoice-v2', voice: 'longxiaochun_v2',
+          baseUrl: '', workspace: '', maxChars: 300, timeoutMs: 30000,
+        },
+      },
+    });
+  });
+
+  it('POST config：语音 apiKey 留空 = 保持已保存的 Key（面板不回显 Key）', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      currentConfig: () => ({
+        voice: { apiKey: 'sk-old', model: 'cosyvoice-v2', voice: 'longxiaochun_v2' },
+      }),
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"voice":{"apiKey":"","maxChars":500}}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toMatchObject({
+      voice: {
+        apiKey: 'sk-old',
+        model: 'cosyvoice-v2',
+        voice: 'longxiaochun_v2',
+        maxChars: 500,
+      },
+    });
+  });
+
+  it('POST config：clearApiKey 显式清空 Key（= 关闭语音）', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      currentConfig: () => ({ voice: { apiKey: 'sk-old' } }),
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, '{"voice":{"clearApiKey":true}}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect((saved?.voice as { apiKey?: string }).apiKey).toBe('');
+  });
+
+  it('POST config：语音 baseUrl 必须是 ws/wss 地址', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, '{"voice":{"baseUrl":"https://example.com"}}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('wss') });
+  });
+
+  it('POST config：语音情感指令折叠空白并截断；自定义音色去空、去重、保持顺序', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      currentConfig: () => ({ voice: { apiKey: 'sk-old' } }),
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, JSON.stringify({
+        voice: {
+          instruction: '  请用清冷、克制的语气\n语速稍慢  ',
+          presets: [
+            { name: '御姐', voice: 'vd-ee1c' },
+            { name: '待填', voice: '  ' },
+            { name: '', voice: 'vd-8521' },
+            { name: '重复', voice: 'vd-ee1c' },
+          ],
+        },
+      })),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    const voice = (saved?.voice ?? {}) as Record<string, unknown>;
+    expect(voice.instruction).toBe('请用清冷、克制的语气 语速稍慢');
+    expect(voice.presets).toEqual([
+      { name: '御姐', voice: 'vd-ee1c' },
+      { name: 'vd-8521', voice: 'vd-8521' },
+    ]);
+  });
+
+  it('POST config：超长情感指令按上限截断、超长音色名称被裁剪', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, JSON.stringify({
+        voice: {
+          instruction: '柔'.repeat(250),
+          presets: [{ name: '名'.repeat(40), voice: 'vd-x' }],
+        },
+      })),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    const voice = (saved?.voice ?? {}) as Record<string, unknown>;
+    expect((voice.instruction as string).length).toBe(200);
+    expect(voice.presets).toEqual([{ name: '名'.repeat(32), voice: 'vd-x' }]);
+  });
+
+  it('POST config：自定义音色超过条数上限被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, JSON.stringify({
+        voice: {
+          presets: Array.from({ length: 21 }, (_, i) => ({ name: `音色${i}`, voice: `vd-${i}` })),
+        },
+      })),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('最多 20 条') });
+  });
+
+  it('GET config：自定义音色与情感指令原样回传（Key 仍遮罩）', async () => {
+    const { routes } = createHarness({
+      currentConfig: () => ({
+        voice: {
+          apiKey: 'sk-secret', instruction: '请用元气满满的语气',
+          presets: [{ name: '元气少女', voice: 'vd-8521' }],
+        },
+      }),
+    });
+    const res = fakeRes();
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), res);
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toMatchObject({
+      config: {
+        voice: {
+          apiKey: '', hasApiKey: true,
+          instruction: '请用元气满满的语气',
+          presets: [{ name: '元气少女', voice: 'vd-8521' }],
+        },
+      },
+    });
+  });
+
+  it('POST config：人格语音情感指令保留，空指令不写回', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, JSON.stringify({
+        personas: [
+          { id: 'cool', name: '清冷', prompt: '', expressions: { voice: { instruction: ' 用清冷克制的语气 ' } } },
+          { id: 'plain', name: '纯聊', prompt: '', expressions: { voice: { instruction: '   ' } } },
+        ],
+      })),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toEqual({
+      personas: [
+        { id: 'cool', name: '清冷', prompt: '', expressions: { voice: { instruction: '用清冷克制的语气' } } },
+        { id: 'plain', name: '纯聊', prompt: '' },
+      ],
+    });
+  });
+
+  it('POST config：人格语音音色通过校验并保留（与颜文字并存）', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"cool","name":"清冷","prompt":"",'
+        + '"expressions":{"kaomoji":{"enabled":true,"style":"cool"},'
+        + '"voice":{"voice":" longanfengyue ","rate":1.2,"volume":60}}},'
+        + '{"id":"plain","name":"纯聊","prompt":"","expressions":{"voice":{}}}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toEqual({
+      personas: [
+        {
+          id: 'cool', name: '清冷', prompt: '',
+          expressions: {
+            kaomoji: { enabled: true, style: 'cool' },
+            voice: { voice: 'longanfengyue', rate: 1.2, volume: 60 },
+          },
+        },
+        { id: 'plain', name: '纯聊', prompt: '' },
+      ],
+    });
+  });
+
+  it('POST config：人格语音语速超出范围被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"cool","name":"清冷","prompt":"","expressions":{"voice":{"rate":9}}}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('0.5–2') });
+  });
+
   it('跨站 Origin：403（state 与 manual 均拦截）', async () => {
     const { routes } = createHarness();
     const res1 = fakeRes();

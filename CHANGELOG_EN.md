@@ -6,6 +6,27 @@ This file records significant dsh-qqbot updates from a product perspective, focu
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.11.0] - 2026-10-31
+
+### ✨ Added
+
+- **Voice replies (`voice`)**: new outbound voice capability built on DashScope real-time speech synthesis (WebSocket). **Whether to speak is decided by the model**: after it calls `qqbot_voice`, the reply body of that turn is synthesized into a QQ voice message and no duplicate text is sent; when synthesis fails or the content does not suit speech, the plugin falls back to text. **Voice is fully disabled while `voice.apiKey` is empty** — no tool registration, no synthesis, no voice message and no quota consumed.
+- **Config**: `voice.apiKey` / `model` (default `qwen-audio-3.0-tts-flash`) / `voice` (default `longanfengyue`) / `instruction` / `presets` / `baseUrl` / `workspace` / `maxChars` (20–1000) / `timeoutMs` (5000–120000), including custom timbres, emotion instructions, custom MaaS gateways and workspaces.
+- **Per-persona timbre**: `personas[].expressions.voice` overrides the global timbre, rate (0.5–2) and volume (0–100); the change applies to the next voice message after switching personas.
+- **Model decides, voice replaces text**: the character-matching `voice.triggerKeywords` trigger is gone. Instead the plugin injects a "voice reply" note (order 88) plus the `qqbot_voice` tool so the model can judge the moment from context; on a voice turn the reply body is only used for synthesis and is not sent as text, fixing the "text first, then the same voice again" duplication. While voice is enabled `qqbot_voice` is exempt from the persona tool whitelist (voice is a delivery mode, not a capability), so a persona with `tools: []` can still reply with voice.
+- **Cleanup and degradation**: code blocks, URLs, Markdown symbols, the `|||` delimiter and kaomoji are skipped; auth errors, unactivated models, timeouts and unspeakable content fall back to the text reply so the message is never lost.
+- **Settings panel "Voice replies" tab**: edits all fields above; the API key is write-only (only a "saved" state is shown) with a "Clear saved key" button. Below Node 22 a warning is logged at startup and voice is disabled.
+- **Built-in timbre presets**: 12 system voices verified on `qwen-audio-3.0-tts-flash` (Longan Fengyue / Longan Yuanfei / Longan Lingxi / Longan Xiaoxin / Longan Huan / Long Jielidou / Long Paopao / Long Huohuo / Long Chuanshu / Loong Mary / Loong John / Loong Eva) are offered as dropdown hints on both the default-timbre and per-persona voice fields; custom ids from voice cloning or voice design can still be pasted directly without being in the preset list.
+- **Custom timbres (`voice.presets`)**: add timbres by hand — just a name plus a voice id (up to 20 entries, names ≤32 characters with the id as fallback, blank ids dropped on save, duplicate ids de-duplicated in order). The "Voice replies" tab gained a custom-timbre editor, and **newly added entries sit at the top of the voice dropdown** while built-in system voices follow; dropdown entries are marked "(custom)" and persona card subtitles show the custom name.
+- **Emotion and tone (`voice.instruction`)**: a natural-language instruction (≤200 characters) describing pace, emotion and delivery (e.g. "cold, restrained tone, slightly slower pace"), sent as `parameters.instruction` on the realtime `run-task` frame so synthesized speech carries emotion. `personas[].expressions.voice.instruction` lets a persona override the global one and falls back to it when left empty. Inline emotion tags (`[sad]`, `[excited]`, …) work too, but they show up in the text message as well — `instruction` is the recommended way day to day.
+- **Script-style reply constraints and cleanup**: the voice prompt requires the reply text to be something actually said out loud — short colloquial lines, no narration, no bracketed stage directions, no `[pause]` markers, no `|||` bubbles or line breaks, emotion carried by `instruction`. Before synthesis the text is cleaned again: `|||` becomes a comma pause, line breaks collapse into one utterance, stage directions in brackets/braces/asterisks are dropped, whitelisted emotion tags (`[excited]`/`[whispers]`, …) are forwarded to TTS verbatim, and `maxChars` truncation never cuts a tag in half.
+
+### Notes
+
+- Voice uses the built-in WebSocket of Node 22+; Node 20 has no global WebSocket, so a key alone does not enable it.
+- Temporary audio is written to `~/.dsh-qqbot/media` and deleted right after sending.
+- Fixed: saving personas in the settings panel no longer drops `expressions` entirely, and disabling kaomoji no longer removes `expressions.voice`.
+
 ## [0.10.0] - 2026-10-31
 
 ### ✨ Added

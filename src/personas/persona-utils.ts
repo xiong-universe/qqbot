@@ -63,6 +63,15 @@ export const PERSONA_TOOLS_ORDER = 86;
 export function buildPersonaPromptSections(
   persona: PersonaPreset | undefined,
   globalPrompt?: string,
+  options?: {
+    /**
+     * 人格白名单之外额外放行的工具（如语音可用时的 `qqbot_voice`）。
+     *
+     * 必须写进这段说明里：否则提示词说「只绑定了 A、B」，而实际工具列表里
+     * 还有 C，模型会按说明认为 C 不可用，从而不敢调用（语音就发不出来）。
+     */
+    extraTools?: readonly string[];
+  },
 ): PromptSection[] {
   const sections: PromptSection[] = [];
   const globalText = globalPrompt?.trim();
@@ -75,8 +84,15 @@ export function buildPersonaPromptSections(
   if (styleText) {
     sections.push({ name: 'qqbot:persona', order: 85, text: styleText });
   }
+  // 没人格或人格没写 tools 时按默认清单放行，不额外说明（默认清单本来就很宽）
   if (persona?.tools !== undefined) {
-    const tools = [...new Set(persona.tools.map((t) => t.trim()).filter(Boolean))];
+    const tools = [
+      ...new Set(
+        [...persona.tools, ...(options?.extraTools ?? [])]
+          .map((t) => t.trim())
+          .filter(Boolean),
+      ),
+    ];
     sections.push({
       name: 'qqbot:persona-tools',
       order: PERSONA_TOOLS_ORDER,

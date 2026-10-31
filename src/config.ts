@@ -102,14 +102,80 @@ export interface KaomojiConfig {
   maxPerReply?: number;
 }
 
+/** 人格语音音色覆盖（可选；不写就用全局 `voice.voice`） */
+export interface PersonaVoiceConfig {
+  /** 音色 id（如 longanfengyue） */
+  voice?: string;
+  /** 语速倍率（0.5–2，缺省 1） */
+  rate?: number;
+  /** 音量（0–100，缺省 50） */
+  volume?: number;
+  /** 情感/语气指令（自然语言，覆盖全局 `voice.instruction`） */
+  instruction?: string;
+}
+
 /**
- * 表达方式配置（颜文字等）。
+ * 表达方式配置（颜文字 / 语音音色等）。
  *
  * 后续表情包（图片）可在同一容器下新增 `sticker` 字段，
  * 人格侧只需增加一个子项，不必再动 `PersonaPreset`。
  */
 export interface ExpressionsConfig {
   kaomoji?: KaomojiConfig;
+  /** 该人格的语音音色覆盖（语音功能本身由全局 `voice.apiKey` 控制） */
+  voice?: PersonaVoiceConfig;
+}
+
+/** 缺省语音模型（DashScope 通义语音合成） */
+export const DEFAULT_VOICE_MODEL = 'qwen-audio-3.0-tts-flash';
+/** 缺省音色 */
+export const DEFAULT_VOICE_ID = 'longanfengyue';
+/** 语音单次朗读字数上限（QQ 语音不宜过长） */
+export const DEFAULT_VOICE_MAX_CHARS = 300;
+/** 语音合成超时(ms) */
+export const DEFAULT_VOICE_TIMEOUT_MS = 30000;
+/** 情感/语气指令长度上限（自然语言一句到两句足够，过长反而稀释指令） */
+export const MAX_VOICE_INSTRUCTION_LEN = 200;
+
+/**
+ * 用户手动添加的音色条目（面板里可增删）。
+ *
+ * 与 `src/voice/voice-presets.ts` 的内置系统音色不同：这里放的是用户自己的
+ * 声音复刻 / 声音设计音色 id（与账号和模型绑定），因此默认空数组，
+ * 且面板下拉里排在系统预设之前（新增项置顶）。
+ */
+export interface VoicePresetEntry {
+  /** 展示名称（下拉里显示的提示文案） */
+  name: string;
+  /** 音色 id（如 qwen-audio-3.0-tts-plus-vd-bailian-xxx） */
+  voice: string;
+}
+
+/**
+ * 出站语音（TTS）配置。
+ *
+ * **门控语义：`apiKey` 为空时语音功能完全关闭**——不注册 qqbot_voice 工具、
+ * 不合成、不发语音，行为与没有这项配置时一致（不消耗额度）。
+ */
+export interface VoiceConfig {
+  /** DashScope API Key（留空 = 关闭语音） */
+  apiKey: string;
+  /** 语音模型 id */
+  model: string;
+  /** 默认音色 id（人格可用 `expressions.voice.voice` 覆盖） */
+  voice: string;
+  /** 情感/语气指令（自然语言：语速、情绪、说话方式） */
+  instruction: string;
+  /** 用户手动添加的音色（排在内置系统预设之前） */
+  presets: VoicePresetEntry[];
+  /** 自定义 WebSocket 地址（自定义 MaaS 网关时填完整 wss 地址） */
+  baseUrl: string;
+  /** 百炼业务空间 id（走 MaaS 网关时用于拼默认地址与请求头） */
+  workspace: string;
+  /** 单次朗读的最大字数（超出截断） */
+  maxChars: number;
+  /** 合成超时(ms) */
+  timeoutMs: number;
 }
 
 /** 人格预设条目（QQ 端可用 /persona 切换） */
@@ -156,7 +222,7 @@ export interface ImQQBotConfig {
   textChunkLimit: number;
   /** 是否启用流式输出（群聊始终不启用） */
   streaming: boolean;
-  /** 回复拆分方式：none=仅按长度切分；delimiter=按固定分隔符 |||；line=每个换行一条；paragraph=按空行分段 */
+  /** 回复拆分方式：none=仅按长度切分；delimiter=按固定分隔符 |||（出现分隔符时剩余换行也拆）；line=每个换行一条；paragraph=按空行分段 */
   replySplitMode: 'none' | 'delimiter' | 'line' | 'paragraph';
   /** 拆分后每条消息之间的间隔(ms)，0=不等候（顺序发送，避免平台限流时可用） */
   replySplitIntervalMs: number;
@@ -186,6 +252,8 @@ export interface ImQQBotConfig {
   vision: VisionConfig;
   /** 附件发送（qqbot_send_file 工具与交付物投递共用） */
   sendFile: SendFileConfig;
+  /** 出站语音（TTS）；apiKey 为空时整体关闭 */
+  voice: VoiceConfig;
 }
 
 /** 身份识别子 Schema（独立导出：config 路由的服务端校验复用） */
@@ -223,9 +291,46 @@ export const KaomojiConfigSchema: Schema<KaomojiConfig> = Schema.object({
     .description('一条回复最多使用几个颜文字（1–3）'),
 });
 
+/** 人格语音音色子 Schema（全部可选：未配置时继承全局音色） */
+export const PersonaVoiceSchema: Schema<PersonaVoiceConfig> = Schema.object({
+  voice: Schema.string().description('音色 id（如 longanfengyue；缺省使用全局 voice.voice）'),
+  rate: Schema.number().description('语速倍率（0.5–2，缺省 1）'),
+  volume: Schema.number().description('音量（0–100，缺省 50）'),
+  instruction: Schema.string().description('情感/语气指令（自然语言；缺省使用全局 voice.instruction）'),
+});
+
+/** 自定义音色子 Schema（用户手动添加的音色：名称 + id） */
+export const VoicePresetEntrySchema: Schema<VoicePresetEntry> = Schema.object({
+  name: Schema.string().description('展示名称（如下拉里的「元气少女」）'),
+  voice: Schema.string().description('音色 id（声音复刻/声音设计得到的专属 id）'),
+});
+
 /** 表达方式子 Schema（出现即启用；后续可扩展 sticker） */
 export const ExpressionsSchema: Schema<ExpressionsConfig> = Schema.object({
   kaomoji: KaomojiConfigSchema,
+  voice: PersonaVoiceSchema,
+});
+
+/** 语音合成子 Schema（独立导出：config 路由的服务端校验复用） */
+export const VoiceConfigSchema: Schema<VoiceConfig> = Schema.object({
+  apiKey: Schema.string().default('')
+    .description('DashScope API Key；留空则不启用语音（不合成、不发语音）'),
+  model: Schema.string().default(DEFAULT_VOICE_MODEL)
+    .description('语音模型 id（如 qwen-audio-3.0-tts-flash / cosyvoice-v2）'),
+  voice: Schema.string().default(DEFAULT_VOICE_ID)
+    .description('默认音色 id（如 longanfengyue）'),
+  instruction: Schema.string().default('')
+    .description('情感/语气指令：用自然语言描述语速、情绪与说话方式（如「用清冷、克制的语气，语速稍慢」）'),
+  presets: Schema.array(VoicePresetEntrySchema).default([])
+    .description('自定义音色（用户手动添加，面板下拉里排在系统预设之前）'),
+  baseUrl: Schema.string().default('')
+    .description('自定义 WebSocket 地址（缺省走 DashScope 官方网关）'),
+  workspace: Schema.string().default('')
+    .description('百炼业务空间 id（走 MaaS 网关时用于拼地址与请求头）'),
+  maxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS)
+    .description('单次朗读的最大字数（超出截断）'),
+  timeoutMs: Schema.number().default(DEFAULT_VOICE_TIMEOUT_MS)
+    .description('语音合成超时(ms)'),
 });
 
 /** 人格预设子 Schema（独立导出：config 路由的服务端校验复用） */
@@ -255,7 +360,7 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
   textChunkLimit: Schema.number().default(4500).description('单条消息最大字符数'),
   streaming: Schema.boolean().default(true).description('是否启用流式输出（群聊始终不启用）'),
   replySplitMode: Schema.union(['none', 'delimiter', 'line', 'paragraph']).default('none')
-    .description('回复拆分方式：none=按长度，delimiter=按固定分隔符 |||（推荐），line=每个换行一条，paragraph=按空行分段'),
+    .description('回复拆分方式：none=按长度，delimiter=按固定分隔符 |||（推荐；出现分隔符时剩余换行也拆，避免气泡里夹断行），line=每个换行一条，paragraph=按空行分段'),
   replySplitIntervalMs: Schema.number().default(0)
     .description('拆分后每条消息之间的间隔(ms)，0=不等候'),
   sessionIdleTimeout: Schema.number().default(30 * 60 * 1000).description('会话闲置超时(ms)'),
@@ -319,4 +424,15 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
     sendPresentedFiles: true,
     maxFiles: 4,
   }).description('附件发送配置'),
+  voice: VoiceConfigSchema.default({
+    apiKey: '',
+    model: DEFAULT_VOICE_MODEL,
+    voice: DEFAULT_VOICE_ID,
+    instruction: '',
+    presets: [],
+    baseUrl: '',
+    workspace: '',
+    maxChars: DEFAULT_VOICE_MAX_CHARS,
+    timeoutMs: DEFAULT_VOICE_TIMEOUT_MS,
+  }).description('出站语音（TTS）配置；apiKey 为空时语音功能关闭'),
 });

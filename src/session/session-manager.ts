@@ -43,6 +43,10 @@ import {
   extractMemoryFacts,
 } from '../memory/memory-prompt.ts';
 import { IdleEvictor } from './idle-evictor.ts';
+import { resolveActiveVoiceSettings } from '../voice/voice-config.ts';
+import { buildVoiceOptions } from '../voice/voice-presets.ts';
+import { buildVoicePromptSection } from '../voice/voice-prompt.ts';
+import { VOICE_TOOL_NAME } from '../voice/voice-tool.ts';
 import type { QuestionChannel } from '../features/question-channel.ts';
 import type { ApprovalChannel } from '../features/approval-channel.ts';
 import type {
@@ -182,7 +186,12 @@ export class SessionManager {
       if (!record) return assembled;
 
       const persona = this.getEffectivePersona(record.scope, record.peerId);
-      const sections = buildPersonaPromptSections(persona, this.config.globalPrompt);
+      const voiceSettings = resolveActiveVoiceSettings(this.config.voice);
+      // 语音可用时 qqbot_voice 无视人格白名单一路放行，所以这里也要把它写进
+      // 「本会话绑定了哪些工具」的说明；否则模型看到说明里没有它就不敢调用。
+      const sections = buildPersonaPromptSections(persona, this.config.globalPrompt, {
+        extraTools: voiceSettings === undefined ? [] : [VOICE_TOOL_NAME],
+      });
       // 身份说明夹在全局提示词与人格之间（order 82）：人格只写称呼与态度，
       // 不再写死 openid；标签含义统一由这里解释。按 order 插入，不依赖宿主排序。
       const identitySection = buildIdentityPromptSection(this.config.identity);
@@ -192,7 +201,15 @@ export class SessionManager {
         this.memoryStore.get(this.sessionKey(record.scope, record.peerId)),
         this.config.memory,
       );
-      const ordered = [identitySection, memorySection].filter(
+      // 语音回复说明（order 88）：只有语音真正可用（voice.apiKey 非空且
+      // 运行时支持 WebSocket）时才注入。这里告诉模型「有语音这条路、什么时候适合、
+      // 怎么用」——不然它不知道该调用 qqbot_voice，语音能力就等于不存在。
+      const voiceSection = buildVoicePromptSection({
+        settings: voiceSettings,
+        personaVoice: persona?.expressions?.voice,
+        voiceOptions: buildVoiceOptions(this.config.voice?.presets, this.config.voice?.model),
+      });
+      const ordered = [identitySection, memorySection, voiceSection].filter(
         (section): section is PromptSection => section !== undefined,
       );
       for (const section of ordered) {
@@ -449,14 +466,23 @@ export class SessionManager {
    * @returns whitelist 实际放行的工具名；blocked 被策略挡掉的名字（仅告警）
    */
   private resolveWhitelist(requested?: readonly string[]): { whitelist: string[]; blocked: string[] } {
-    if (requested === undefined) return { whitelist: [...DEFAULT_TOOL_ALLOWLIST], blocked: [] };
-    const whitelist: string[] = [];
-    const blocked: string[] = [];
-    for (const raw of requested) {
-      const name = raw.trim();
-      if (name === '') continue;
-      if (DEFAULT_TOOL_ALLOWLIST.includes(name)) whitelist.push(name);
-      else blocked.push(name);
+    let whitelist: string[];
+    let blocked: string[] = [];
+    if (requested === undefined) {
+      whitelist = [...DEFAULT_TOOL_ALLOWLIST];
+    } else {
+      whitelist = [];
+      for (const raw of requested) {
+        const name = raw.trim();
+        if (name === '') continue;
+        if (DEFAULT_TOOL_ALLOWLIST.includes(name)) whitelist.push(name);
+        else blocked.push(name);
+      }
+    }
+    // 语音是「投递方式」而不是一项能力：语音可用时始终放行 qqbot_voice，
+    // 即使人格显式写了 `tools: []`（否则该人格永远发不了语音）。
+    if (resolveActiveVoiceSettings(this.config.voice) !== undefined && !whitelist.includes(VOICE_TOOL_NAME)) {
+      whitelist.push(VOICE_TOOL_NAME);
     }
     return { whitelist, blocked };
   }

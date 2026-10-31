@@ -103,9 +103,10 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `globalPrompt` | string | `''` | Global system prompt applied to all group/direct chats (put split rules here) |
 | `personas` | array | `[]` | Persona presets (switchable via `/persona` in QQ, each with an optional `tools` whitelist) |
 | `defaultPersona` | string | `''` | Default persona id; empty disables personas |
+| `voice` | object | see below | Outbound voice (TTS): **leaving `apiKey` empty disables voice replies**, see below |
 | `textChunkLimit` | number | `4500` | Max chars per message |
 | `streaming` | boolean | `true` | Enable streaming output (always disabled in groups) |
-| `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | Reply split mode: `delimiter` splits only at the fixed `|||` delimiter; splitting disables streaming |
+| `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | Reply split mode: `delimiter` splits at the fixed `|||` delimiter (recommended; once a delimiter appears, leftover newlines in a segment also split); splitting disables streaming |
 | `replySplitIntervalMs` | number | `0` | Delay between split messages (ms), `0` = send immediately |
 | `sessionIdleTimeout` | number | `1800000` | Session idle timeout (ms), default 30 min |
 | `processingTimeoutMs` | number | `1800000` | Processing timeout (ms), aborts the current LLM call |
@@ -148,14 +149,89 @@ Split the single prompt into several switchable personas, each with its own tool
   - `maxPerReply`: max kaomoji per reply (1–3, default 1).
   - `custom`: extra kaomoji (up to 20 entries, ≤32 chars each), appended after the preset list.
   - The library lives in `src/expressions/kaomoji.ts`; future sticker (image) support will add a `sticker` field to the same `expressions` container without changing the persona shape.
+- `expressions.voice`: **the persona's voice timbre** (optional). `voice` overrides the global timbre, `rate` (0.5–2) / `volume` (0–100) are optional, and `instruction` overrides the global emotion/tone instruction (empty inherits the global value). Voice replies themselves are gated by the global `voice.apiKey`; nothing here takes effect while it is empty. Example: `expressions: { voice: { voice: longanfengyue, rate: 1.1, instruction: 请用清冷克制的语气 } }`.
 - `tools` is a **hard** runtime constraint: the persona's agent calls `tools.restrict({ allow })`, so tools outside the whitelist are not even visible to the model (not just discouraged by the prompt).
   - Omit `tools` to use the **default allowlist**: the 7 plugin tools (`qqbot_solve`, `qqbot_describe_image`, `qqbot_send_file`, `qqbot_translate`, `qqbot_summarize`, `qqbot_explain`, `qqbot_rewrite`) plus `ask_user_question` and read-only `web_search` / `web_fetch`.
   - `tools: []` disables all tools for that persona.
   - Persona tool names are intersected with the default allowlist: host tools such as `read`, `write`, `pwsh`, `bash` are never granted (a warning is logged), and unknown names are ignored.
+  - Exception: while voice is enabled `qqbot_voice` is always allowed (voice is a delivery mode, not a capability), so even a persona with `tools: []` can reply with voice.
   - Switching personas re-applies the binding immediately; `/tools` shows the current binding (admins only, diagnostic — hidden from the command menu).
   - Bind tools in the settings panel: expand a persona card, turn on "limit available tools", then pick from the dropdown (candidates are plugin tools only; chosen ones render as removable chips).
 - Personas are per-chat (group id / direct-chat user id); `/persona <id>` override > `defaultPersona`.
-- Prompt order: `globalPrompt` (80) → identity (82) → persona prompt (85) → tool-permission note (86, when `tools` is set) → memory (87).
+- Prompt order: `globalPrompt` (80) → identity (82) → persona prompt (85) → tool-permission note (86, when `tools` is set) → memory (87) → voice note (88, when voice is enabled).
+
+### Voice replies (voice)
+
+Speak replies instead of typing them: built on DashScope real-time speech synthesis (WebSocket). **Whether to use voice is decided by the model** — when voice fits, it calls the `qqbot_voice` tool and the reply body of that turn is synthesized into a QQ voice message and is **no longer sent as duplicate text**; if synthesis fails or the content is unsuitable for speech, the plugin falls back to the text reply. **Voice is fully disabled while `voice.apiKey` is empty** — no tool registration, no synthesis, no voice message, no quota consumed.
+
+```yaml
+- id: im-qqbot
+  config:
+    voice:
+      apiKey: ''                        # empty = voice disabled; fill in a Bailian API key to enable
+      model: qwen-audio-3.0-tts-flash   # TTS model (cosyvoice-v2 and others also work)
+      voice: longanfengyue              # default timbre
+      instruction: 请用清冷、克制的语气，语速稍慢   # emotion/tone instruction (natural language, optional)
+      presets:                          # custom timbres (listed above the built-in presets)
+        - name: 元气少女
+          voice: qwen-audio-3.0-tts-plus-vd-bailian-85212a2f84dc4f55ba9cddc8fef8be1c
+      maxChars: 300                     # max spoken characters per reply (20–1000)
+      timeoutMs: 30000                  # synthesis timeout in ms (5000–120000)
+      # baseUrl: wss://xxx/api-ws/v1/inference   # custom MaaS gateway (optional)
+      # workspace: xxx                          # Bailian workspace id (optional)
+```
+
+| Config | Type | Default | Description |
+|------|------|--------|------|
+| `voice.apiKey` | string | `''` | DashScope API key; **empty = voice disabled** (in the settings panel, leaving it empty keeps the saved key — use "Clear saved key" to actually disable) |
+| `voice.model` | string | `qwen-audio-3.0-tts-flash` | TTS model id; the model must be activated in the Bailian console |
+| `voice.voice` | string | `longanfengyue` | Default timbre id; personas can override it via `expressions.voice.voice` |
+| `voice.instruction` | string | `''` | Emotion/tone instruction (natural language, ≤200 chars): speed, mood, delivery; personas can override it via `expressions.voice.instruction` |
+| `voice.presets` | array | `[]` | Custom timbre list (`{ name, voice }`, ≤20); **listed before the built-in presets** in the dropdown, newest first |
+| `voice.baseUrl` | string | `''` | Custom WebSocket URL (`ws://` / `wss://`); empty falls back to workspace or the official gateway |
+| `voice.workspace` | string | `''` | Bailian workspace id (builds the MaaS URL and sends `X-DashScope-WorkSpace`) |
+| `voice.maxChars` | number | `300` | Max characters spoken per reply; longer text is truncated |
+| `voice.timeoutMs` | number | `30000` | Synthesis timeout; on timeout the voice reply degrades to text |
+
+- **Model decides, voice replaces text**: when voice is enabled the model gets a "voice reply" note (order 88). If voice fits ("say something", "send a voice message", "let me hear your voice", "sing a song", short goodnight/comforting lines) it calls `qqbot_voice`, and the reply body of that turn is only used for synthesis — it is not sent as a text message, so there is no "text first, then the same voice again".
+- **Automatic fallback**: auth errors, unactivated models, network timeouts or unspeakable content degrade to the original text reply, so the message is never lost; temporary audio is written to `~/.dsh-qqbot/media` and deleted after sending.
+- **Per-persona timbre**: `personas[].expressions.voice` overrides the global timbre, rate, volume and emotion instruction; the change applies to the next voice message after switching personas. The model may also pick a one-off tone (e.g. "with a smile") for the current turn.
+- **Automatic cleanup**: code blocks, URLs, Markdown symbols, the `|||` delimiter and kaomoji are not read aloud.
+- **Runtime requirement**: uses the built-in WebSocket in Node 22+; on Node 20 voice is disabled at startup with a warning even if a key is filled in.
+- The "Voice replies" tab in the settings panel edits these fields; a saved API key is **never echoed back**, only a "saved" state is shown.
+
+#### Built-in timbre presets (`qwen-audio-3.0-tts-flash`)
+
+The "Default timbre" field and each persona's "Voice timbre" field offer a dropdown (datalist). These ids were all verified against a real account:
+
+| Name | Voice id | Character |
+|------|----------|-----------|
+| 龙安风悦 | `longanfengyue` | natural, friendly (female, 30) |
+| 龙安元妃 | `longanyuanfei` | aloof imperial consort (female, 30) |
+| 龙安灵希 | `longanlingxi` | cute and sweet (female, 25) |
+| 龙安小昕 | `longanxiaoxin` | warm and lively (female, 22) |
+| 龙安欢 | `longanhuan_v3.6` | lively (female, 25) |
+| 龙杰力豆 | `longjielidou_v3.6` | innocent boy (male, 5) |
+| 龙泡泡 | `longpaopao_v3.6` | soft and cute (female, 5) |
+| 龙火火 | `longhuohuo_v3.6` | mischievous teen (male, 8) |
+| 龙川叔 | `longchuanshu_v3.6` | Sichuan-accented uncle (male, 40) |
+| Loong Mary | `loongmary` | warm British English (female, 20) |
+| Loong John | `loongjohn` | calm, friendly American English (male, 28) |
+| Loong Eva | `loongeva_v3.6` | high-intelligence American English (female, 28) |
+
+- Presets only apply to `qwen-audio-3.0-tts-flash`; with another model (e.g. `cosyvoice-v2`) the dropdown is empty and you must type a timbre id that model supports.
+- Custom ids from voice cloning / voice design (e.g. `qwen-audio-3.0-tts-plus-vd-bailian-<hash>`) can be pasted directly; they do not need to be in the preset list, and the same suffix is shared between plus and flash.
+
+#### Custom timbres and emotion control
+
+- **Add a timbre manually**: in the settings panel → "Voice replies" → "Custom timbres", click "＋ Add timbre" and fill in a name + timbre id (or write them into `voice.presets`). New rows are inserted at the top of the list, so the dropdown shows the newest custom timbre first and the built-in presets last; an empty name falls back to the id, rows without an id are dropped on save (max 20).
+- **Emotion / tone (`instruction`)**: `voice.instruction` is one natural-language sentence describing speed, mood and delivery (≤200 chars), sent as `parameters.instruction` in `run-task`; personas can override it via `personas[].expressions.voice.instruction` (empty inherits the global value). Examples:
+  - cool senpai: `请用清冷、平静、略带疏离的语气，语速稍慢，情绪克制`
+  - energetic girl: `请用元气满满、轻快、带笑意的语气，语速稍快，句尾上扬`
+  - maid: `请用恭敬、轻柔、温和的语气，语速平缓，带一点体贴的笑意`
+  - mature lady: `请用成熟、慵懒、略带温柔的语调，语速稍慢，气息柔和`
+- **Inline emotion tags** (service capability, supported by `qwen-audio-3.0-tts-plus / flash`): `[excited]`, `[sad]`, `[serious]`, `[laughing]`, `[sighing]`, `[whispers]`, `[very slowly]` / `[very fast]`, … **Only these whitelisted tags are forwarded to TTS as-is**; any other bracketed text is treated as a note and dropped (so `[pause:1s]` is never read aloud). Prefer `instruction` for everyday emotion control (or a one-off tone for the current turn) — use tags when the emotion changes sentence by sentence.
+- **The reply text is cleaned as a script**: `|||` becomes a comma pause, line breaks collapse into one utterance, stage directions in brackets/braces/asterisks (`（小声）`, `【突然】`, `*叹气*`) are dropped, and code blocks, URLs, Markdown, kaomoji are stripped before `maxChars` truncation (truncation never cuts a tag in half).
 
 ### Identity (identity)
 

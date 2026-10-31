@@ -57,6 +57,15 @@ interface ToolCallRecord {
 const SILENT_TURN_ERROR_CODES = new Set(['STREAM_CLOSED']);
 
 /**
+ * 语音朗读适配器（voice/voice-reply.ts 的 VoiceSpeaker 满足）。
+ *
+ * 语音是可选能力：配置缺失时 bootstrap 不注入，路由器按「没有语音」运行。
+ */
+export interface VoiceSpeakerLike {
+  speak(record: SessionRecord, text: string): Promise<boolean>;
+}
+
+/**
  * 出站路由器：持有会话级状态，按事件类型分发到处理器
  */
 class OutboundRouter {
@@ -73,12 +82,21 @@ class OutboundRouter {
    * turn/end 时需等待其完成再投递交付文件，保证回复文本先于文件到达用户）。
    */
   private readonly pendingText = new Map<string, Promise<void>>();
+  /** 每会话本轮最后一条非空 assistant 文本（语音轮由它合成，不再发文字） */
+  private readonly lastReplyTexts = new Map<string, string>();
+  /**
+   * 每会话本轮已经发出的 assistant 文本（轮末清空）。
+   * 时序兜底：模型若先写正文再调用 qqbot_voice，文字已经送达，此时不能再补一条
+   * 同内容的语音，否则用户会把同一句话收两遍。
+   */
+  private readonly sentReplyTexts = new Map<string, string>();
   private readonly manager: SessionManager;
   private readonly bot: QQBotSender;
   private readonly config: ImQQBotConfig;
   private readonly logger: Logger;
   private readonly toolsRegistry: ToolsRegistryLike | undefined;
   private readonly deliverer: DeliverablesDelivererLike | undefined;
+  private readonly voice: VoiceSpeakerLike | undefined;
 
   public constructor(
     manager: SessionManager,
@@ -87,6 +105,7 @@ class OutboundRouter {
     logger: Logger,
     toolsRegistry: ToolsRegistryLike | undefined,
     deliverer?: DeliverablesDelivererLike,
+    voice?: VoiceSpeakerLike,
   ) {
     this.manager = manager;
     this.bot = bot;
@@ -94,6 +113,7 @@ class OutboundRouter {
     this.logger = logger;
     this.toolsRegistry = toolsRegistry;
     this.deliverer = deliverer;
+    this.voice = voice;
   }
 
   /** 事件分发入口 */
@@ -182,20 +202,31 @@ class OutboundRouter {
   /**
    * 是否启用流式：配置开启 + c2c + 有 msgId（群聊不支持流式）。
    * 开启多消息拆分时关闭流式：QQ 流式只能在一条消息内全量替换，
-   * 无法拆成多条独立消息。
+   * 无法拆成多条独立消息。本轮模型选择了语音回复时同样不流式：正文只用于
+   * 合成，若先流出去就会和语音重复。
    */
   private shouldStream(record: SessionRecord): boolean {
     return (this.config.replySplitMode ?? 'none') === 'none'
       && this.config.streaming
       && record.replyTarget.scope === 'c2c'
-      && !!record.replyTarget.msgId;
+      && !!record.replyTarget.msgId
+      && record.voiceRequested !== true;
   }
 
   /** 完整 assistant 消息：有流式 buffer 则 flush，否则直接发送文本块 */
   private onMessage(sessionId: string, record: SessionRecord, event: MessageEvent): void {
     const buffer = this.buffers.get(sessionId);
     if (buffer !== undefined && buffer.text.trim()) {
-      this.trackText(sessionId, buffer.flush());
+      // 先记录全文：本轮语音回复时朗读这条回复，文字不再重复发送
+      this.lastReplyTexts.set(sessionId, buffer.text);
+      if (record.voiceRequested === true) {
+        // 边流边调 qqbot_voice：文字已经可见，记下来，轮末不再补语音
+        if (buffer.delivered) this.markTextSent(sessionId, buffer.text);
+        buffer.cancel();
+      } else {
+        this.markTextSent(sessionId, buffer.text);
+        this.trackText(sessionId, buffer.flush());
+      }
       this.buffers.delete(sessionId);
       return;
     }
@@ -207,8 +238,19 @@ class OutboundRouter {
     const fullText = textParts.join('\n');
     if (!fullText.trim()) return;
 
-    this.trackText(sessionId, this.send(record, fullText, 'sendMarkdown'));
+    this.lastReplyTexts.set(sessionId, fullText);
     this.buffers.delete(sessionId);
+    // 语音回复：正文只用于合成，不发文字（否则用户会收到同样的内容两遍）
+    if (record.voiceRequested === true) return;
+    this.markTextSent(sessionId, fullText);
+    this.trackText(sessionId, this.send(record, fullText, 'sendMarkdown'));
+  }
+
+  /** 记录本轮已发出的 assistant 文本（多条消息按顺序拼接，用于语音轮去重判断） */
+  private markTextSent(sessionId: string, text: string): void {
+    if (!text.trim()) return;
+    const previous = this.sentReplyTexts.get(sessionId) ?? '';
+    this.sentReplyTexts.set(sessionId, previous === '' ? text : `${previous}\n${text}`);
   }
 
   /** 记录每会话最后一笔在途文本任务（自身吞错：错误已由 send/flush 内部记录） */
@@ -257,16 +299,29 @@ class OutboundRouter {
   }
 
   /**
-   * 轮次结束：文本先送达、再投递交付文件、最后清理状态，异常结束时告知用户。
+   * 轮次结束：文本先送达、模型选了语音时改为发语音、再投递交付文件、
+   * 最后清理状态，异常结束时告知用户。
    * 外层轮次失败不撤销已完成的声明（宿主契约），故失败轮的文件仍投递。
    */
   private onTurnEnd(sessionId: string, record: SessionRecord, event: TurnEndEvent): void {
     const buffer = this.buffers.get(sessionId);
-    // 文本 flush 可等待，保证回复先于交付文件到达用户
+    const voiceRequested = record.voiceRequested === true;
+    // 语音标记只对当前一轮有效：轮末立即复位（直接 delete，避免在 record 上留无意义字段）
+    if (voiceRequested) delete record.voiceRequested;
+    delete record.voiceInstruction;
+
+    // 文本 flush 可等待，保证回复先于交付文件到达用户；语音轮不 flush（正文只用于合成）
     let flushTask: Promise<void> = Promise.resolve();
     if (buffer !== undefined) {
       if (buffer.text.trim()) {
-        flushTask = buffer.flush();
+        this.lastReplyTexts.set(sessionId, buffer.text);
+        if (voiceRequested) {
+          if (buffer.delivered) this.markTextSent(sessionId, buffer.text);
+          buffer.cancel();
+        } else {
+          this.markTextSent(sessionId, buffer.text);
+          flushTask = buffer.flush();
+        }
       } else {
         buffer.cancel();
       }
@@ -276,6 +331,11 @@ class OutboundRouter {
     const files = this.presentedFiles.get(sessionId) ?? [];
     this.presentedFiles.delete(sessionId);
     this.presentedCalls.delete(sessionId);
+    // 本轮最后一条 assistant 文本：语音轮朗读它，不再另发文字
+    const voiceText = this.lastReplyTexts.get(sessionId) ?? '';
+    // 本轮已经发出去的正文：语音轮据此判断是否还有重复风险
+    const sentText = this.sentReplyTexts.get(sessionId) ?? '';
+    this.sentReplyTexts.delete(sessionId);
     // assistant/message 已在轮内先行发送的文本可能仍在途：与 turn/end 自身的 flush 一起等待
     const pending = this.pendingText.get(sessionId) ?? Promise.resolve();
     this.pendingText.delete(sessionId);
@@ -285,6 +345,24 @@ class OutboundRouter {
       await Promise.all([flushTask, pending]);
       if (failure !== undefined && !SILENT_TURN_ERROR_CODES.has(failure.code)) {
         await this.send(record, `⚠️ 本轮异常结束\n\`${failure.code}\`: ${failure.message}`, 'sendTurnEndError');
+      }
+      /*
+       * 语音轮：本轮正文已经扣下、没有发文字，这里换成语音（先听到回复，再收附件）。
+       * 合成/发送失败或语音不可用时退回文字，避免用户什么都收不到。
+       */
+      let spoken = false;
+      if (voiceRequested && voiceText.trim() !== '') {
+        if (sentText.trim() !== '') {
+          // 时序兜底：模型先写了正文再调用 qqbot_voice，文字已经送达，再补语音就是重复
+          this.logger.warn(`im-qqbot: 本轮已发送文字，跳过语音以免重复 sessionId=${sessionId}`);
+        } else if (this.voice !== undefined) {
+          spoken = await this.voice.speak(record, voiceText);
+        }
+      }
+      this.lastReplyTexts.delete(sessionId);
+      // 退回文字时避开已发出的同一段内容（否则又是重复）
+      if (voiceRequested && !spoken && voiceText.trim() !== '' && !sentText.includes(voiceText.trim())) {
+        await this.send(record, voiceText, 'sendVoiceFallback');
       }
       if (files.length > 0 && this.deliverer !== undefined) {
         await this.deliverer.deliver(record, files);
@@ -315,7 +393,8 @@ class OutboundRouter {
  *
  * 返回 durable 事件与实时流式帧两个入口，分别注册到
  * ctx.on('session/event') 与 ctx.on('agent/assistant-stream', ..., { global: true })。
- * toolsRegistry 用于工具结果的结构化展示；deliverer 用于轮末投递 present 声明的交付文件。
+ * toolsRegistry 用于工具结果的结构化展示；deliverer 用于轮末投递 present 声明的交付文件；
+ * voice 用于把模型选择了语音的回复合成成语音（未配置 API Key 时由 bootstrap 传 undefined）。
  */
 export function createOutboundHandler(
   manager: SessionManager,
@@ -324,8 +403,9 @@ export function createOutboundHandler(
   logger: Logger,
   toolsRegistry?: ToolsRegistryLike,
   deliverer?: DeliverablesDelivererLike,
+  voice?: VoiceSpeakerLike,
 ): OutboundHandlers {
-  const router = new OutboundRouter(manager, bot, config, logger, toolsRegistry, deliverer);
+  const router = new OutboundRouter(manager, bot, config, logger, toolsRegistry, deliverer, voice);
   return {
     routeSessionEvent: (session, event) => router.route(session, event),
     routeStreamFrame: (agentId, delta) => router.routeStreamFrame(agentId, delta),

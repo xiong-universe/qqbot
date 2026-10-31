@@ -129,6 +129,17 @@ export interface SessionRecord {
   senderId: string;
   lastActivity: number;
   agentPreset?: string;
+  /**
+   * 本轮是否由模型选择了语音回复（模型调用 `qqbot_voice` 后置 true）。
+   *
+   * 每条入站消息都会复位：语音只在模型明确要求的那一轮生效，不会顺着会话延续。
+   * 语音功能未配置（`voice.apiKey` 为空）时工具不注册，该标记恒为 undefined。
+   */
+  voiceRequested?: boolean;
+  /**
+   * 本轮单轮情感指令（`qqbot_voice({ instruction })` 传入），覆盖人格/全局设置。
+   */
+  voiceInstruction?: string;
   /** 当前人格工具限制状态（personaId=null 表示关闭人格/未配置） */
   toolRestriction?: {
     personaId: string | null;

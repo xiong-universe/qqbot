@@ -68,6 +68,11 @@ export class OutboundBuffer {
     return this.buffer;
   }
 
+  /** 是否已经向用户推送过文本（流式分片至少成功发送过一次） */
+  public get delivered(): boolean {
+    return this.writer !== null && !this.writer.shouldFallback;
+  }
+
   /** 重置累积文本（LLM 重试的新 attempt），流式会话保留由全量 update 重写 */
   public reset(): void {
     this.buffer = '';
