@@ -83,6 +83,35 @@ export interface SendFileConfig {
   maxFiles: number;
 }
 
+/**
+ * 颜文字配置：必须显式 `enabled: true` 才生效。
+ *
+ * 注意不能以「出现 kaomoji 对象」作为开关：Schema 会为每个人格
+ * 物化默认子对象，否则所有未配置的人格都会被误开启。
+ * 风格库见 `src/expressions/kaomoji.ts`；运行时拼进 system prompt，
+ * 不依赖工具调用。
+ */
+export interface KaomojiConfig {
+  /** 是否启用（缺省 false） */
+  enabled?: boolean;
+  /** 预设风格 id（daily / genki / chuuni / cat / tsundere / soft / cool / maid），缺省 daily */
+  style?: string;
+  /** 自定义补充颜文字（最多 20 条） */
+  custom?: string[];
+  /** 一条回复最多使用几个颜文字（1–3，缺省 1） */
+  maxPerReply?: number;
+}
+
+/**
+ * 表达方式配置（颜文字等）。
+ *
+ * 后续表情包（图片）可在同一容器下新增 `sticker` 字段，
+ * 人格侧只需增加一个子项，不必再动 `PersonaPreset`。
+ */
+export interface ExpressionsConfig {
+  kaomoji?: KaomojiConfig;
+}
+
 /** 人格预设条目（QQ 端可用 /persona 切换） */
 export interface PersonaPreset {
   /** 稳定标识（命令用，字母/数字/-/_，唯一） */
@@ -94,10 +123,12 @@ export interface PersonaPreset {
   /**
    * 该人格可用的工具名白名单（硬约束：运行时限制模型可见的工具）。
    *
-   * 缺省（不写）表示不限制，继承宿主全部工具；
+   * 缺省（不写）表示使用默认放行清单（插件内置工具 + 只读联网/提问能力）；
    * 配置为空数组表示该人格没有任何工具能力。
    */
   tools?: string[];
+  /** 表达方式（颜文字；后续可扩展表情包） */
+  expressions?: ExpressionsConfig;
 }
 
 export interface ImQQBotConfig {
@@ -180,13 +211,31 @@ export const AccessControlSchema: Schema<AccessControlConfig> = Schema.object({
   groupAllow: Schema.array(Schema.string()).default([]).description('群聊白名单（群 OpenID）'),
 });
 
+/** 颜文字子 Schema（独立导出：config 路由的服务端校验复用） */
+export const KaomojiConfigSchema: Schema<KaomojiConfig> = Schema.object({
+  enabled: Schema.boolean().default(false)
+    .description('是否启用颜文字（必须显式 true）'),
+  style: Schema.string().default('daily')
+    .description('颜文字风格 id（daily/genki/chuuni/cat/tsundere/soft/cool/maid）'),
+  custom: Schema.array(Schema.string()).default([])
+    .description('自定义补充颜文字（最多 20 条，每条 ≤32 字）'),
+  maxPerReply: Schema.number().default(1)
+    .description('一条回复最多使用几个颜文字（1–3）'),
+});
+
+/** 表达方式子 Schema（出现即启用；后续可扩展 sticker） */
+export const ExpressionsSchema: Schema<ExpressionsConfig> = Schema.object({
+  kaomoji: KaomojiConfigSchema,
+});
+
 /** 人格预设子 Schema（独立导出：config 路由的服务端校验复用） */
 export const PersonaPresetSchema: Schema<PersonaPreset> = Schema.object({
   id: Schema.string().description('人格标识（字母/数字/-/_，唯一）'),
   name: Schema.string().description('人格展示名称'),
   prompt: Schema.string().description('该人格的 system prompt'),
   tools: Schema.array(Schema.string())
-    .description('可用工具白名单（缺省 = 全部工具；空数组 = 无工具）'),
+    .description('可用工具白名单（缺省 = 默认放行清单；空数组 = 无工具；清单外的宿主工具一律禁用）'),
+  expressions: ExpressionsSchema.description('表达方式（颜文字等；缺省不启用）'),
 });
 
 export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({

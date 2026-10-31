@@ -13,16 +13,21 @@
 import { basename } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm';
+import type { ContentBlock, GenerateOptions } from '@deepseek-ai/dsh-llm';
 import type { ImQQBotConfig } from '../config.ts';
 import { collectStreamText } from '../shared/llm-text.ts';
-import type { DshAgent, SessionManager } from '../session/index.ts';
 import type { Logger } from '../types.ts';
 import {
   loadImageBytes,
   type ImageAttachmentRef,
   type ImageMediaType,
 } from '../media/image-input.ts';
+import {
+  resolveSessionRoute,
+  type LlmRuntimeLike,
+  type SessionModelLookup,
+  type ToolsRegistryLike,
+} from './model-route.ts';
 
 /** 工具名（qqbot 前缀避免与其他通道的同名工具冲突） */
 export const SOLVE_TOOL_NAME = 'qqbot_solve';
@@ -60,15 +65,11 @@ const DESCRIPTION =
   + 'problems, multiple-choice questions, and any task whose goal is "what is the answer". '
   + 'Do not use it for open-ended chatting or for merely describing an image.';
 
-/** tools 服务最小接口 */
-interface ToolsRegistryLike {
-  register(definition: unknown): unknown;
-}
+/** tools 服务最小接口（复用 model-route 的局部投影） */
+type ToolsRegistry = ToolsRegistryLike;
 
-/** llm 服务最小接口 */
-interface LlmRuntimeLike {
-  stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
-}
+/** llm 服务最小接口（复用 model-route 的局部投影） */
+type LlmRuntime = LlmRuntimeLike;
 
 /** attachments 服务最小接口（仅图片题需要） */
 interface AttachmentStoreLike {
@@ -76,7 +77,7 @@ interface AttachmentStoreLike {
 }
 
 /** SessionManager 中本题需要的部分（type-only：避免 features → session 的运行时循环依赖） */
-export type SolveSessionLookup = Pick<SessionManager, 'findByAgent' | 'getEffectiveModel'>;
+export type SolveSessionLookup = SessionModelLookup;
 
 /** qqbot_solve 的合法参数 */
 interface SolveArgs {
@@ -84,12 +85,6 @@ interface SolveArgs {
   image?: string;
   subject?: string;
   level?: string;
-}
-
-/** 解题实际使用的模型路由 */
-interface SolveRoute {
-  provider: string;
-  model: string;
 }
 
 /** 空串/纯空白视为未提供 */
@@ -133,36 +128,18 @@ export function buildSolvePrompt(
 }
 
 /**
- * 解析本次解题使用的模型：会话当前路由（含 per-peer /model 覆盖）> 配置默认。
- * 都取不到时返回 undefined，由调用方报错。
+ * 注册 qqbot_solve 工具（服务缺失时优雅降级，不阻断插件启动）。
+ *
+ * 模型路由由 features/model-route.ts 统一解析（与实用小工具共用）。
  */
-function resolveRoute(
-  manager: SolveSessionLookup,
-  config: ImQQBotConfig,
-  agent: unknown,
-): SolveRoute | undefined {
-  if (agent !== undefined) {
-    const record = manager.findByAgent(agent as DshAgent);
-    if (record !== undefined) {
-      const route = manager.getEffectiveModel(record.scope, record.peerId);
-      if (route?.provider && route.model) return { provider: route.provider, model: route.model };
-    }
-  }
-  if (config.provider && config.model) {
-    return { provider: config.provider, model: config.model };
-  }
-  return undefined;
-}
-
-/** 注册 qqbot_solve 工具（服务缺失时优雅降级，不阻断插件启动） */
 export function registerSolveTool(
   ctx: Context,
   manager: SolveSessionLookup,
   config: ImQQBotConfig,
   logger: Logger,
 ): void {
-  const tools = ctx.get('tools') as ToolsRegistryLike | undefined;
-  const llm = ctx.get('llm') as LlmRuntimeLike | undefined;
+  const tools = ctx.get('tools') as ToolsRegistry | undefined;
+  const llm = ctx.get('llm') as LlmRuntime | undefined;
   if (!tools?.register || !llm?.stream) {
     logger.warn('im-qqbot: tools/llm 服务不可用，qqbot_solve 工具未注册');
     return;
@@ -225,7 +202,7 @@ export function registerSolveTool(
         );
       }
 
-      const route = resolveRoute(manager, config, exec.agent);
+      const route = resolveSessionRoute(manager, config, exec.agent);
       if (route === undefined) {
         throw new Error(`${SOLVE_TOOL_NAME}: 无法确定解题模型，请在配置中设置 provider/model`);
       }

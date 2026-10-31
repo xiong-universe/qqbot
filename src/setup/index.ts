@@ -34,6 +34,8 @@ export interface EnsureCredentialsOptions {
   source?: string;
   /** 当前生效配置（apply 时 loader 合并值；config 路由 GET 回显用） */
   config: Record<string, unknown>;
+  /** 宿主此刻可用的工具名（config 路由 GET 时求值；面板下拉用） */
+  availableTools?: () => string[];
 }
 
 /**
@@ -95,6 +97,7 @@ export async function ensureCredentials(
         return persistCredentials(credentials, logger);
       },
       currentConfig: () => options.config,
+      availableTools: options.availableTools,
     });
     // 回调作用域（服务卸载/替换、插件卸载）连带注销路由
     (scoped as unknown as { effect(fn: () => () => void, name?: string): void }).effect(() => {
@@ -111,7 +114,13 @@ export async function ensureCredentials(
  * 在 apply 的 bootstrapGateway 之前调用；写入经同一 persist 路径，
  * 保存后触发 HMR 重载、新 fiber 以新凭据重启网关。
  */
-export function registerBoundCredentialRoutes(ctx: Context, logger: Logger, appId: string, config: Record<string, unknown>): void {
+export function registerBoundCredentialRoutes(
+  ctx: Context,
+  logger: Logger,
+  appId: string,
+  config: Record<string, unknown>,
+  availableTools?: () => string[],
+): void {
   (ctx as unknown as {
     inject(deps: readonly string[], callback: (scoped: Context) => void): unknown;
   }).inject(['webServer'], (scoped) => {
@@ -121,6 +130,7 @@ export function registerBoundCredentialRoutes(ctx: Context, logger: Logger, appI
       boundAppId: () => appId,
       onManualCredentials: (credentials) => persistCredentials(credentials, logger),
       currentConfig: () => config,
+      availableTools,
     });
     (scoped as unknown as { effect(fn: () => () => void, name?: string): void }).effect(() => {
       return disposeRoutes;

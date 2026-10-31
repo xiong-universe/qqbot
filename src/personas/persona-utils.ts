@@ -6,6 +6,7 @@
  * - 生成 system-prompt/assemble 需要的 section（全局提示词 + 人格本体）
  */
 import type { PersonaPreset } from '../config.ts';
+import { buildKaomojiPrompt } from '../expressions/kaomoji.ts';
 
 /** system-prompt section 最小结构 */
 export interface PromptSection {
@@ -54,6 +55,8 @@ export const PERSONA_TOOLS_ORDER = 86;
  *
  * 全局提示词（order=80）对所有会话生效，人格 prompt（order=85）在其后：
  * 全局部分写多条消息拆分规则等通用约束，人格只描述「是谁」。
+ * 人格启用了颜文字时，把颜文字用法并进人格 section（同属说话风格），
+ * 不单独占一个 order，避免和工具权限说明（order=86）抢位置。
  * 人格配置了工具白名单时追加一段权限说明（order=86），提醒模型不要在
  * 没有对应工具时假装完成文件/图片/联网等操作。
  */
@@ -67,8 +70,10 @@ export function buildPersonaPromptSections(
     sections.push({ name: 'qqbot:global-prompt', order: 80, text: globalText });
   }
   const personaText = persona?.prompt.trim();
-  if (personaText) {
-    sections.push({ name: 'qqbot:persona', order: 85, text: personaText });
+  const kaomojiText = buildKaomojiPrompt(persona);
+  const styleText = [personaText, kaomojiText].filter((text): text is string => !!text).join('\n\n');
+  if (styleText) {
+    sections.push({ name: 'qqbot:persona', order: 85, text: styleText });
   }
   if (persona?.tools !== undefined) {
     const tools = [...new Set(persona.tools.map((t) => t.trim()).filter(Boolean))];

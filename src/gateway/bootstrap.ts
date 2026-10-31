@@ -25,6 +25,7 @@ import { setupMiddlewares } from './middleware-setup.ts';
 import { startMediaCleanup } from '../media/media-cleaner.ts';
 import { ensureVisionInputModal, registerDescribeImageTool } from '../media/vision-tool.ts';
 import { registerSolveTool } from '../features/solve-tool.ts';
+import { registerTextTools } from '../features/text-tools.ts';
 import { registerSendFileTool, type MediaSenderLike } from '../media/send-file-tool.ts';
 import { DeliverablesDeliverer } from '../transport/deliverables.ts';
 
@@ -185,6 +186,9 @@ export async function bootstrapGateway(
 
   // ── 做题工具注册（qqbot_solve，走会话当前模型） ──
   registerSolveTool(ctx, manager, config, logger);
+
+  // ── 实用小工具注册（翻译 / 总结 / 讲解 / 改写，同样走会话当前模型） ──
+  registerTextTools(ctx, manager, config, logger);
 
   // ── 附件发送工具注册（qqbot_send_file，发送器见上方 mediaSender） ──
   registerSendFileTool(ctx, mediaSender, manager, config, logger);

@@ -161,6 +161,10 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
         name: 猫娘
         prompt: 你是一只可爱的猫娘，句尾带「喵」。
         tools: []          # 纯聊天人格：不绑定任何工具
+        expressions:
+          kaomoji:
+            enabled: true  # 必须显式开启
+            style: cat     # 颜文字风格：daily/genki/chuuni/cat/tsundere/soft/cool/maid
       - id: media
         name: 看图助手
         prompt: 你擅长看图和发文件。
@@ -170,11 +174,17 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 ```
 
 - `id`：字母/数字/`-`/`_`，1–64 位，列表内唯一；`name` 是 QQ 菜单展示名；`prompt` 是该人格的 system prompt；`tools` 是该人格可用的工具白名单。
-- **工具权限是硬约束，不是提示词**：配置了 `tools` 的人格会在运行时通过 `tools.restrict({ allow })` 限制模型可见的工具，白名单之外的工具模型根本看不到、调不到。
-  - 不写 `tools`（缺省）：继承宿主全部工具，行为与旧版本一致。
-  - `tools: []`：该人格没有任何工具能力（不能读写文件、发图/发文件、运行命令、联网）。
-  - 工具名需与宿主注册名一致（如 `qqbot_send_file`、`qqbot_describe_image`、`read`、`bash`）；未注册的名字会被忽略并在日志里告警。
-  - 切换人格后工具权限**立即重新绑定**，无需 `/new`；`/tools` 可查看当前人格的绑定（仅管理员）。
+- `expressions.kaomoji`：**颜文字**（可选，必须显式 `enabled: true` 才启用）。按气质选一套风格（`daily` 日常 / `genki` 元气 / `chuuni` 中二 / `cat` 猫系 / `tsundere` 傲娇 / `soft` 温柔 / `cool` 清冷 / `maid` 女仆，缺省 `daily`）；运行时把该风格的颜文字清单与使用规则（可加语气、一条回复最多 1 个）并入人格 prompt，**不需要工具调用**。
+  - `enabled`：是否启用（缺省 `false`）。之所以要求显式开启，是因为配置 Schema 会为每个人格物化默认子对象，只看「有没有 `kaomoji`」会让所有人格都被误开。
+  - `maxPerReply`：一条回复最多用几个颜文字（1–3，缺省 1）。
+  - `custom`：自定义补充颜文字（最多 20 条，每条 ≤32 字），排在预设清单之后供模型挑选。
+  - 颜文字库在 `src/expressions/kaomoji.ts`，按情绪分组；后续表情包（图片）会在同一 `expressions` 容器下新增 `sticker`，人格配置形态不变。
+- **工具权限是硬约束，不是提示词**：QQ 会话在运行时通过 `tools.restrict({ allow })` 限制模型可见的工具，白名单之外的工具模型根本看不到、调不到（宿主 preset 里的文件读写、命令执行、子 agent、定时任务等一律被挡掉）。
+  - 不写 `tools`（缺省）：使用**默认放行清单**——7 个插件内置工具（`qqbot_solve`、`qqbot_describe_image`、`qqbot_send_file`、`qqbot_translate`、`qqbot_summarize`、`qqbot_explain`、`qqbot_rewrite`）+ `ask_user_question` + 只读的 `web_search` / `web_fetch`。
+  - `tools: []`：该人格没有任何工具能力（不能做题、看图、发文件、翻译/总结，也不能联网）。
+  - 人格写的 `tools` 与默认清单**求交**：默认清单之外的名字（如 `read`、`write`、`pwsh`、`bash`）不会生效，日志会告警「配置了默认不开放的工具（已禁用）」；未注册的名字会被忽略。
+  - 切换人格后工具权限**立即重新绑定**，无需 `/new`；`/tools` 可查看当前人格的绑定（仅管理员，诊断用，不在命令菜单中展示）。
+  - 日常绑定建议在设置面板里做：展开人格卡片 → 开启「限制可用工具」→ 从下拉里逐个选择（候选只有插件内置工具，已选的显示为可删除的标签）。
 - **人格按会话隔离**：群聊按群 ID、私聊按用户 ID 分别记录，同一个群里切人格不会影响其他群或其他私聊。
 - 生效优先级：本会话 `/persona <id>` 选择 > `defaultPersona`；都没有则不启用人格（仅保留 `globalPrompt`）。
 - 注入顺序：`globalPrompt`（order 80）→ 身份说明（order 82，配置了 `identity` 时）→ 人格 prompt（order 85）→ 工具权限说明（order 86，配置了 `tools` 时）→ 记忆与关系（order 87，开启 `memory` 时）；人格只描述「是谁」，拆条等通用规则统一写在 `globalPrompt`。
@@ -279,7 +289,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `/model` | 查看或切换模型（仅管理员） |
 | `/preset` | 查看或切换 agent preset（新会话生效，仅管理员） |
 | `/persona`（别名 `/人格`） | 查看人格菜单并切换人格（下一条消息生效，仅管理员）；`/persona default` 跟随默认，`/persona off` 关闭本会话人格 |
-| `/tools`（别名 `/工具`） | 查看当前人格的工具绑定与宿主可用工具清单（仅管理员）；`/tools <人格id>` 预览某个人格的绑定结果 |
+| `/tools`（别名 `/工具`） | 诊断用：查看当前人格的工具绑定与宿主可用工具清单（仅管理员，不在命令菜单中展示）；日常在设置面板用下拉绑定工具 |
 | `/memory`（别名 `/记忆`） | 查看本会话的长期记忆与关系阶段（仅管理员）；`/memory add <内容>` 手动记一条，`/memory del <序号>` 删除，`/memory clear` 清空要点 |
 | `/whoami`（别名 `/我是谁`） | 查看当前场景下的 openid 与被判定的身份（配置主人/管理员名单用） |
 | `/stop` | 中止当前生成（仅管理员，不在菜单中展示） |
@@ -371,7 +381,10 @@ sessionKey: `qqbot:${appId}:${scope}:${peerId}`，新会话铸造 UUID 会话 id
 - **Markdown 输出** — 回复以 Markdown 格式发送，支持代码块/表格感知切分
 - **图片理解** — 支持 `qqbot_describe_image` 视觉理解，可分析用户发送的图片
 - **做题** — 支持 `qqbot_solve` 解题（题干文本 / 题目截图，走会话当前模型），固定输出「答案 + 过程」两段
+- **文本小工具** — `qqbot_translate`（翻译）、`qqbot_summarize`（长文总结）、`qqbot_explain`（讲解概念/代码/报错）、`qqbot_rewrite`（改写润色），同样走会话当前模型，无需额外依赖
+- **颜文字** — 人格可开启 `expressions.kaomoji`，按气质选风格（日常 / 元气 / 中二 / 猫系 / 傲娇 / 温柔 / 清冷 / 女仆），按情绪分组直接注入 prompt，不额外调用工具
 - **附件发送** — 支持 `qqbot_send_file` 将本地文件发送给用户（默认启用路径白名单）
+- **工具默认收敛** — QQ 会话默认只放行插件内置工具 + 只读联网/提问能力，宿主的文件读写与命令执行不对外开放
 - **问答互动** — 支持 `ask_user_question`，单选生成内联按钮（点一个其余变灰）、多选回复编号，逐题推进 + 问题级超时
 - **操作确认** — 支持 `approval/request`，关键操作通过「允许/拒绝」按钮请求用户确认
 

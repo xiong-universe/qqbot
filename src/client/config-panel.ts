@@ -18,6 +18,8 @@
  */
 import { createElement, useCallback, useEffect, useState, type CSSProperties, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { BIND_CONFIG_PATH } from '../shared/bind-protocol.ts';
+import { catalogToolNames, groupToolNames, isPluginToolName, mergeToolNames } from '../shared/tool-catalog.ts';
+import { KAOMOJI_STYLES, DEFAULT_KAOMOJI_STYLE, findKaomojiStyle } from '../expressions/kaomoji.ts';
 
 /** 访问控制配置（与 src/config.ts 的 AccessControlConfig 对应的局部投影） */
 interface AccessControlWire {
@@ -42,13 +44,23 @@ interface MemoryWire {
   maxNotes: number;
 }
 
+/** 人格表达方式（与 src/config.ts 的 ExpressionsConfig 对应的局部投影） */
+interface KaomojiWire {
+  enabled?: boolean;
+  style?: string;
+  custom?: string[];
+  maxPerReply?: number;
+}
+
 /** 人格预设（与 src/config.ts 的 PersonaPreset 对应的局部投影） */
 interface PersonaWire {
   id: string;
   name: string;
   prompt: string;
-  /** 工具白名单；undefined = 不限制（继承全部工具） */
+  /** 工具白名单；undefined = 使用默认放行清单（插件内置工具 + 只读联网/提问） */
   tools?: string[];
+  /** 表达方式；必须显式 enabled:true 才启用（Schema 会物化默认子对象） */
+  expressions?: { kaomoji?: KaomojiWire };
 }
 
 /** GET 回显的生效配置（appSecret 已剔除） */
@@ -75,7 +87,7 @@ type ConfigWire = {
 
 /** 样式注入标记（幂等；版本变化时替换旧样式，避免客户端热更新后仍用旧样式） */
 const STYLE_ID = 'im-qqbot-config-panel-styles';
-const STYLE_VERSION = '2';
+const STYLE_VERSION = '3';
 
 /** DSW 通用设置风格（settings-form / Switch / SegmentedControl 原语复刻） */
 function useConfigPanelStyles(): void {
@@ -135,6 +147,23 @@ function useConfigPanelStyles(): void {
 .imqb2-input:focus { outline: none; border-color: var(--dsw-alias-state-business-primary); }
 .imqb2-input:disabled { color: var(--dsw-alias-label-tertiary); cursor: default; }
 .imqb2-textarea { height: auto; min-height: 68px; padding: 8px 12px; resize: vertical; line-height: 1.5; }
+/* 工具下拉（原生 select + 已选 chip） */
+.imqb2-select { padding: 0 8px; cursor: pointer; }
+.imqb2-select:disabled { cursor: default; }
+.imqb2-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.imqb2-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  padding: 3px 8px; border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 999px; background: var(--dsw-alias-bg-layer-3);
+  font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-primary);
+  word-break: break-all;
+}
+.imqb2-chip-x {
+  appearance: none; flex: none; border: 0; background: transparent; padding: 0 1px;
+  font: inherit; font-size: 13px; line-height: 1; cursor: pointer;
+  color: var(--dsw-alias-label-tertiary);
+}
+.imqb2-chip-x:hover { color: var(--dsw-alias-label-primary); }
 /* 分段控件（官方 SegmentedControl 复刻：指示器按段数/索引定位） */
 .imqb2-seg {
   position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr;
@@ -343,15 +372,68 @@ function SegmentedRow({ label, help, value, options, onChange }: {
 }
 
 /**
+ * 人格工具下拉：已选工具以 chip 展示，下拉只列还没选中的候选。
+ *
+ * 候选 = 宿主运行时工具 ∪ 内置常用清单 ∪ 当前已配置的名字，
+ * 所以清空后还能从下拉里把同一个工具加回来。
+ */
+function ToolPicker({ selected, available, onChange }: {
+  selected: string[]; available: string[]; onChange: (next: string[]) => void;
+}): ReactNode {
+  const chosen = selected.map((name) => name.trim()).filter(Boolean);
+  const groups = groupToolNames(available.filter((name) => !chosen.includes(name)));
+
+  return createElement('div', { className: 'imqb2-field', style: { padding: '4px 0 0', borderTop: 0 } },
+    chosen.length === 0
+      ? createElement('p', { className: 'imqb2-hint' }, '还没选任何工具：留空 = 该人格没有任何工具能力。')
+      : createElement('div', { className: 'imqb2-chips' },
+          chosen.map((name) => createElement('span', { key: name, className: 'imqb2-chip' },
+            name,
+            createElement('button', {
+              type: 'button', className: 'imqb2-chip-x',
+              'aria-label': `移除 ${name}`, title: `移除 ${name}`,
+              onClick: () => { onChange(chosen.filter((item) => item !== name)); },
+            }, '×'),
+          )),
+        ),
+    createElement('select', {
+      className: 'imqb2-input imqb2-select',
+      'aria-label': '添加工具',
+      value: '',
+      onChange: (event: ChangeEvent<HTMLSelectElement>) => {
+        const name = event.currentTarget.value;
+        if (name !== '') onChange([...chosen, name]);
+      },
+    },
+      createElement('option', { value: '' },
+        groups.length === 0 ? '已选完全部可用工具' : '＋ 选择要允许的工具…'),
+      groups.map(({ group, tools }) => createElement('optgroup', { key: group, label: group },
+        tools.map((tool) => createElement('option', { key: tool.name, value: tool.name },
+          `${tool.label}（${tool.name}）`)),
+      )),
+    ),
+  );
+}
+
+/**
  * 单个人格预设编辑卡片（抽屉式：默认收起，点击标题展开 id / 名称 / prompt）
  *
  * 收起态只占一行，人格多时面板不会被撑得过长。
  */
-function PersonaCard({ index, value, expanded, onChange, onToggle, onRemove }: {
-  index: number; value: PersonaWire; expanded: boolean;
+function PersonaCard({ index, value, expanded, available, onChange, onToggle, onRemove }: {
+  index: number; value: PersonaWire; expanded: boolean; available: string[];
   onChange: (next: Partial<PersonaWire>) => void; onToggle: () => void; onRemove: () => void;
 }): ReactNode {
   const title = value.name.trim() || value.id.trim() || `人格 ${index + 1}`;
+  const kaomojiEnabled = value.expressions?.kaomoji?.enabled === true;
+  const kaomojiStyle = kaomojiEnabled
+    ? (value.expressions?.kaomoji?.style?.trim() || 'daily')
+    : '';
+  const subtitle = [
+    value.id.trim(),
+    value.tools === undefined ? undefined : `工具 ${value.tools.filter((t) => t.trim()).length}`,
+    kaomojiEnabled ? `颜文字·${findKaomojiStyle(kaomojiStyle)?.name ?? kaomojiStyle}` : undefined,
+  ].filter((part): part is string => part !== undefined).join(' · ');
   return createElement('div', { className: 'imqb2-persona' },
     createElement('div', { className: 'imqb2-persona-head' },
       createElement('button', {
@@ -364,11 +446,7 @@ function PersonaCard({ index, value, expanded, onChange, onToggle, onRemove }: {
           className: 'imqb2-persona-arrow', 'data-expanded': expanded,
         }, '▶'),
         createElement('span', { className: 'imqb2-persona-title' }, title),
-        createElement('span', { className: 'imqb2-persona-sub' },
-          value.tools === undefined
-            ? value.id.trim()
-            : `${value.id.trim()} · 工具 ${value.tools.filter((t) => t.trim()).length}`,
-        ),
+        createElement('span', { className: 'imqb2-persona-sub' }, subtitle),
       ),
       createElement('button', {
         type: 'button', className: 'imqb2-persona-remove',
@@ -392,6 +470,54 @@ function PersonaCard({ index, value, expanded, onChange, onToggle, onRemove }: {
             placeholder: '该人格的 system prompt（只写角色设定/说话风格）',
             onChange: (event: ChangeEvent<HTMLTextAreaElement>) => { onChange({ prompt: event.currentTarget.value }); },
           }),
+          createElement('div', { className: 'imqb2-field', style: { padding: '8px 0 4px', borderTop: 0 } },
+            createElement('div', { className: 'imqb2-head' },
+              createElement('span', { className: 'imqb2-label' }, '颜文字'),
+              createElement(Switch, {
+                checked: kaomojiEnabled,
+                label: '颜文字',
+                onChange: (checked) => {
+                  if (!checked) { onChange({ expressions: undefined }); return; }
+                  const current = value.expressions?.kaomoji;
+                  onChange({
+                    expressions: {
+                      ...value.expressions,
+                      kaomoji: {
+                        ...current,
+                        enabled: true,
+                        style: current?.style?.trim() || DEFAULT_KAOMOJI_STYLE,
+                      },
+                    },
+                  });
+                },
+              }),
+            ),
+            kaomojiEnabled
+              ? createElement('div', { className: 'imqb2-head', style: { marginTop: '6px' } },
+                  createElement('span', { className: 'imqb2-label' }, '风格'),
+                  createElement('select', {
+                    className: 'imqb2-input imqb2-select', style: { width: 'auto', minWidth: '160px' },
+                    'aria-label': '颜文字风格',
+                    value: kaomojiStyle || DEFAULT_KAOMOJI_STYLE,
+                    onChange: (event: ChangeEvent<HTMLSelectElement>) => {
+                      const style = event.currentTarget.value;
+                      const current = value.expressions?.kaomoji;
+                      onChange({
+                        expressions: {
+                          ...value.expressions,
+                          kaomoji: { ...current, enabled: true, style },
+                        },
+                      });
+                    },
+                  },
+                    KAOMOJI_STYLES.map((style) => createElement('option', { key: style.id, value: style.id },
+                      `${style.name}（${style.id}）`)),
+                  ),
+                )
+              : null,
+            createElement('p', { className: 'imqb2-hint' },
+              '开启后把该风格的颜文字清单写进 system prompt，模型按语境自然使用（默认一条回复最多 1 个），不需要工具调用。'),
+          ),
           createElement('div', { className: 'imqb2-head' },
             createElement('span', { className: 'imqb2-label' }, '限制可用工具'),
             createElement(Switch, {
@@ -402,17 +528,14 @@ function PersonaCard({ index, value, expanded, onChange, onToggle, onRemove }: {
           ),
           value.tools === undefined
             ? createElement('p', { className: 'imqb2-hint' },
-                '关闭时继承宿主全部工具；开启后模型只能看到下面列出的工具（硬约束，不是提示词）。')
-            : createElement('textarea', {
-                className: 'imqb2-input imqb2-textarea',
-                value: value.tools.join('\n'), rows: 3,
-                placeholder: '每行一个工具名，例如:\nqqbot_send_file\nqqbot_describe_image\n\n留空 = 禁用该人格的全部工具',
-                onChange: (event: ChangeEvent<HTMLTextAreaElement>) => {
-                  onChange({ tools: event.currentTarget.value.split('\n') });
-                },
+                '关闭时使用默认放行清单（插件内置工具 + 只读联网/提问）；开启后模型只能看到下面选中的工具（硬约束，不是提示词）。')
+            : createElement(ToolPicker, {
+                selected: value.tools,
+                available,
+                onChange: (next) => { onChange({ tools: next }); },
               }),
           createElement('p', { className: 'imqb2-hint' },
-            '工具名可在 QQ 端用 `/tools` 查看（仅管理员）；未注册的名字会被忽略并在日志中告警。'),
+            '候选只有 QQ 插件内置工具（做题 / 看图 / 发文件 / 翻译 / 总结 / 讲解 / 改写）；文件读写、命令执行等宿主能力默认不开放。'),
         )
       : null,
   );
@@ -470,6 +593,8 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   useConfigPanelStyles();
   const [initial, setInitial] = useState<ConfigWire | null>(null);
   const [form, setForm] = useState<ConfigWire | null>(null);
+  // 宿主运行时上报的工具名（与内置清单合并后供人格工具下拉）
+  const [discoveredTools, setDiscoveredTools] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -485,10 +610,11 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     void fetch(BIND_CONFIG_PATH, { cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = (await res.json()) as { config: ConfigWire };
+        const body = (await res.json()) as { config: ConfigWire; tools?: string[] };
         if (stopped) return;
         setInitial(body.config);
         setForm(body.config);
+        setDiscoveredTools(Array.isArray(body.tools) ? body.tools : []);
       })
       .catch((err: unknown) => {
         if (!stopped) setLoadError(err instanceof Error ? err.message : String(err));
@@ -598,6 +724,15 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const memory: MemoryWire = form.memory
     ?? { enabled: true, autoCapture: true, maxNotes: 20 };
   const personas = form.personas ?? [];
+
+  // 工具下拉候选：只保留插件内置工具（做题/看图/发文件 + 翻译/总结/讲解/改写）。
+  // 宿主 preset 的文件读写、命令执行等能力不进候选；已配置的旧名字仍以 chip
+  // 展示，方便用户逐个删掉。
+  const toolCandidates = mergeToolNames(
+    discoveredTools.filter((name) => isPluginToolName(name)),
+    catalogToolNames(),
+    ...personas.map((persona) => (persona.tools ?? []).filter((name) => isPluginToolName(name))),
+  );
 
   const updatePersona = (index: number, next: Partial<PersonaWire>): void => {
     const list = [...(form.personas ?? [])];
@@ -823,6 +958,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       index,
       value: persona,
       expanded: expandedPersonas.has(index),
+      available: toolCandidates,
       onChange: (next) => { updatePersona(index, next); },
       onToggle: () => { togglePersona(index); },
       onRemove: () => { removePersona(index); },

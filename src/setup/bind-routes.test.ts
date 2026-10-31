@@ -340,6 +340,27 @@ describe('bind-routes', () => {
     expect(json(res)).toEqual({ config: { appId: '102120114', requireMention: true, cwd: '/tmp/w' } });
   });
 
+  it('GET config：提供 availableTools 时附带工具候选（面板下拉用）', async () => {
+    const { routes } = createHarness({
+      currentConfig: () => ({ requireMention: true }),
+      availableTools: () => ['qqbot_solve', 'qqbot_send_file'],
+    });
+    const res = fakeRes();
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), res);
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toEqual({ config: { requireMention: true }, tools: ['qqbot_solve', 'qqbot_send_file'] });
+  });
+
+  it('GET config：availableTools 为空时不带 tools 字段（老客户端兼容）', async () => {
+    const { routes } = createHarness({
+      currentConfig: () => ({ requireMention: true }),
+      availableTools: () => [],
+    });
+    const res = fakeRes();
+    await invoke(routes.get(BIND_CONFIG_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), res);
+    expect(json(res)).toEqual({ config: { requireMention: true } });
+  });
+
   it('POST config：白名单内合法值通过并触发合并写入', async () => {
     const { routes } = createHarness({ onUpdateConfig: () => true });
     const res = fakeRes();
@@ -443,6 +464,77 @@ describe('bind-routes', () => {
     );
     expect(res.statusCode).toBe(400);
     expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('必须是数组') });
+  });
+
+  it('POST config：人格颜文字配置通过校验并规范化', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"genki","name":"元气","prompt":"","expressions":{"kaomoji":'
+        + '{"enabled":true,"style":" genki ","custom":[" (๑•̀ㅂ•́)و✧ ","","(๑•̀ㅂ•́)و✧"],"maxPerReply":2}}},'
+        + '{"id":"plain","name":"纯聊","prompt":"","expressions":{}}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toEqual({
+      personas: [
+        {
+          id: 'genki', name: '元气', prompt: '',
+          expressions: {
+            kaomoji: { enabled: true, style: 'genki', custom: ['(๑•̀ㅂ•́)و✧'], maxPerReply: 2 },
+          },
+        },
+        { id: 'plain', name: '纯聊', prompt: '' },
+      ],
+    });
+  });
+
+  it('POST config：enabled 未显式 true 的颜文字对象被丢弃（GET 回显的默认物化对象）', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"cat","name":"猫娘","prompt":"",'
+        + '"expressions":{"kaomoji":{"enabled":false,"style":"cat"}}}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toEqual({ personas: [{ id: 'cat', name: '猫娘', prompt: '' }] });
+  });
+
+  it('POST config：未知颜文字风格被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"cat","name":"猫娘","prompt":"","expressions":{"kaomoji":{"style":"nope"}}}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('未知风格') });
+  });
+
+  it('POST config：颜文字每条上限超出范围被拒绝', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' },
+        '{"personas":[{"id":"cat","name":"猫娘","prompt":"","expressions":{"kaomoji":{"maxPerReply":9}}}]}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('1–3') });
   });
 
   it('POST config：全局提示词与拆分模式通过校验并原样保存', async () => {

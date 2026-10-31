@@ -10,19 +10,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### ✨ Added
 
-- **Per-persona tool binding (hard constraint)**: `personas[].tools` declares a tool whitelist per persona and applies it at runtime via `tools.restrict({ allow })`, so tools outside the whitelist are invisible to the model instead of merely discouraged by the prompt. Omit `tools` to inherit every host tool; `tools: []` disables all tools for that persona.
-- **`/tools` command** (alias `/工具`, admins only): shows the current persona's binding (unrestricted / limited to N tools), the allowed and unknown lists, and the host tool list; `/tools <persona-id>` previews any persona.
+- **Per-persona tool binding (hard constraint)**: `personas[].tools` declares a tool whitelist per persona and applies it at runtime via `tools.restrict({ allow })`, so tools outside the whitelist are invisible to the model instead of merely discouraged by the prompt. `tools: []` disables all tools for that persona.
+- **Constrained tool defaults (plugin tools only)**: omitting `tools` no longer inherits every host tool. QQ sessions use a default allowlist of the 7 plugin tools (solve / describe image / send file / translate / summarize / explain / rewrite) plus `ask_user_question` and read-only `web_search` / `web_fetch`. Host file access (`read`/`write`/`edit`), shells (`pwsh`/`bash`), sub-agents and scheduled jobs are disabled; persona whitelists are intersected with this list, so naming `read` is denied and logged (fail-closed).
+- **Four text utilities**: `qqbot_translate` (optional target/source language), `qqbot_summarize` (adjustable bullet count), `qqbot_explain` (concepts/code/errors with optional audience and focus) and `qqbot_rewrite` (tone and length adjustable). All use the **session's current model** and need no vision or file services; input is capped at 8000 characters per call.
+- **Kaomoji styles (`expressions.kaomoji`)**: personas can enable kaomoji with an explicit `enabled: true` (default `false` — the config schema materializes a default sub-object per persona, so merely checking for `kaomoji` would enable it everywhere). Pick a style matching the temperament (daily / genki / chuuni / cat / tsundere / soft / cool / maid, default daily), plus `custom` entries and `maxPerReply` (1–3 per reply). The library lives in `src/expressions/kaomoji.ts`, grouped by mood, and is merged into the persona prompt — **no tool call involved**. The settings panel now has a kaomoji switch on each persona card plus a style dropdown that appears once it is enabled; the `expressions` container leaves room for future sticker support.
+- **`/tools` command** (alias `/工具`, admins only, **hidden from the command menu**): diagnostic only — shows the current persona's binding (default policy / limited to N tools), the allowed and denied lists, and the host tool list. Day-to-day binding is done in the settings panel.
 - **Applies immediately on switch**: `/persona`, `/persona default` and `/persona off` release the old restriction and re-bind the new persona without `/new`. Restrictions are also released on idle eviction, fork rebuild and session removal.
 - **Tool-permission prompt section** (order 86): when tools are bound, an extra section tells the model which tools exist and to say it cannot do something beyond them instead of pretending.
-- **Settings panel**: each persona card gained a "Restrict tools" switch and a tool-name editor (one per line).
+- **Settings panel**: each persona card gained a "Restrict tools" switch and a tool **dropdown picker** — selected tools render as removable chips, and candidates are plugin tools only (solve / describe image / send file / translate / summarize / explain / rewrite), grouped by category. Saving reloads the plugin.
 - **Tabbed settings panel**: configuration is split into six tabs — access, identity, memory, conversation, model & prompts, and personas — showing one section at a time. Tabs with unsaved edits show a dot, and the Save button stays pinned at the bottom.
 - **`qqbot_solve` problem-solving tool**: separates exam/homework solving from chit-chat. Pass `problem` (question text) or `image` (screenshot path or URL); it calls the **session's current model** (`/model` switches apply immediately) and always answers in a fixed "answer / worked steps" layout. Images need the attachments service; text-only questions do not.
 
 ### Notes
 
-- Personas without `tools` behave exactly as in 0.9.0, so existing configs are unaffected.
+- **Behavior change**: personas without `tools` no longer inherit every host tool; the default policy allows plugin tools plus read-only web access and question prompts. Custom personas relying on file access or shells must use plugin tools instead — those host capabilities are intentionally not exposed.
 - Tool names must match host registrations; unknown names are ignored and logged. If the tools service is unavailable, the restriction fails closed to "no tools".
-- Tools registered by an `agentPresets` scope itself are not affected by `restrict` (dsh semantics); this deployment does not mount a preset by default, so the host global tools (including `qqbot_*`) are the ones constrained.
+- Names outside the default allowlist are silently denied (with a warning in the log) even when listed in a persona's `tools`.
+- Host tools mounted by `agentPresets` (e.g. the standard preset) belong to an ancestor layer of the agent scope and are filtered by `restrict` too, so preset file-system, shell and sub-agent tools are likewise invisible in QQ sessions.
 
 ## [0.9.0] - 2026-10-31
 

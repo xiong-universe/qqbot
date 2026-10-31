@@ -112,4 +112,22 @@ describe('buildPersonaPromptSections', () => {
     const sections = buildPersonaPromptSections({ id: 'p5', name: 'x', prompt: '你好。' }, '');
     expect(sections.map((s) => s.name)).toEqual(['qqbot:persona']);
   });
+
+  it('启用颜文字时并入人格 section（不额外占 order）', () => {
+    const sections = buildPersonaPromptSections({
+      id: 'genki', name: '元气', prompt: '你是元气满满的学妹。',
+      expressions: { kaomoji: { enabled: true, style: 'genki' } },
+    }, '');
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.name).toBe('qqbot:persona');
+    expect(sections[0]?.order).toBe(85);
+    expect(sections[0]?.text).toContain('你是元气满满的学妹。');
+    expect(sections[0]?.text).toContain('【颜文字使用】');
+    expect(sections[0]?.text).toContain('风格：元气');
+  });
+
+  it('关闭颜文字时人格 section 保持原样', () => {
+    const sections = buildPersonaPromptSections({ id: 'p7', name: 'x', prompt: '你好。' }, '');
+    expect(sections[0]?.text).toBe('你好。');
+  });
 });

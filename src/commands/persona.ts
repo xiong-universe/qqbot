@@ -72,13 +72,13 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
         const current = manager.getEffectivePersona(scope, peerId);
         return current
           ? `✅ 本会话已恢复默认人格: ${current.name} (${current.id})\n工具权限按默认人格重新绑定，下一条消息生效。`
-          : '✅ 本会话已恢复默认（当前未配置默认人格，人格已关闭）\n工具权限恢复为不限制，下一条消息生效。';
+          : '✅ 本会话已恢复默认（当前未配置默认人格，人格已关闭）\n工具权限回到默认放行清单（插件内置工具 + 只读联网/提问），下一条消息生效。';
       }
 
       // off：仅关闭当前会话的人格
       if (args === 'off') {
         manager.disablePersona(scope, peerId);
-        return '✅ 已关闭本会话人格（群聊/私聊各自独立）\n工具权限恢复为不限制，下一条消息生效，恢复默认用 `/persona default`。';
+        return '✅ 已关闭本会话人格（群聊/私聊各自独立）\n工具权限回到默认放行清单（插件内置工具 + 只读联网/提问），下一条消息生效，恢复默认用 `/persona default`。';
       }
 
       // 切换到指定人格
@@ -90,7 +90,7 @@ export function personaCommand({ manager, config }: CommandDeps): CategorizedCom
 
       manager.setPersonaOverride(scope, peerId, persona.id);
       const tools = persona.tools === undefined
-        ? '工具: 继承全部'
+        ? '工具: 默认策略'
         : persona.tools.length === 0 ? '工具: 无' : `工具: ${persona.tools.length} 个`;
       return `✅ 人格已切换（仅本会话/本群）: ${persona.name} (${persona.id})\n${tools}，下一条消息生效。`;
     },

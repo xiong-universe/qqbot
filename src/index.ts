@@ -11,6 +11,7 @@ import { bootstrapGateway } from './gateway/index.ts';
 import type { DshAgentRegistry } from './session/index.ts';
 import { getProfileDir, resolveEnv } from './shared/index.ts';
 import { ensureCredentials, persistCredentialsToProfile, registerBoundCredentialRoutes } from './setup/index.ts';
+import { listToolNames, type ToolsRestrictServiceLike } from './personas/persona-tools.ts';
 import type { Logger } from './types.ts';
 
 // ── Cordis 插件元数据 ──
@@ -19,6 +20,22 @@ export const inject = ['agents'];
 export const Config = ConfigSchema;
 
 export type { ImQQBotConfig } from './config.ts';
+
+/**
+ * 设置面板工具下拉的候选：宿主全局层此刻可见的工具名。
+ *
+ * 不带 agent 作用域只能看到全局层（preset 层工具在 agent 作用域下），
+ * 所以结果可能只有工程目录 + qqbot_*；面板会与内置清单合并展示。
+ * 服务未就绪/不可访问时返回空数组（面板回落到内置清单）。
+ */
+function listHostToolNames(ctx: Context): string[] {
+  try {
+    const tools = (ctx as unknown as { get?(name: string): unknown }).get?.('tools');
+    return listToolNames(tools as ToolsRestrictServiceLike | undefined, undefined);
+  } catch {
+    return [];
+  }
+}
 
 // ── 插件主体 ──
 export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> {
@@ -36,7 +53,11 @@ export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> 
     // 无限期等待用户扫码会阻塞 Host ready——Desktop 界面无法进入、
     // Web 的 URL 延迟输出。绑定编排（路由/呈现/生命周期）在
     // ensureCredentials 的同步阶段即完成，凭据就绪后由异步链接管。
-    void ensureCredentials(ctx, { logger, config: { ...config } })
+    void ensureCredentials(ctx, {
+      logger,
+      config: { ...config },
+      availableTools: () => listHostToolNames(ctx),
+    })
       .then((credentials): void => {
         if (!credentials) {
           // null 包括：扫码取消、手动提交（已另行持久化）、流程失败
@@ -74,7 +95,7 @@ export async function apply(ctx: Context, config: ImQQBotConfig): Promise<void> 
   }
 
   // 已绑定：注册常驻路由（状态回显 + 手动编辑/更换凭据 + 配置编辑）
-  registerBoundCredentialRoutes(ctx, logger, appId, { ...config });
+  registerBoundCredentialRoutes(ctx, logger, appId, { ...config }, () => listHostToolNames(ctx));
 
   const resolvedConfig: ImQQBotConfig = { ...config, appId, appSecret };
 

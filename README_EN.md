@@ -131,6 +131,10 @@ Split the single prompt into several switchable personas, each with its own tool
         name: Chat
         prompt: You are a casual chat partner.
         tools: []          # pure-chat persona: no tools at all
+        expressions:
+          kaomoji:
+            enabled: true  # must be explicitly enabled
+            style: genki   # daily/genki/chuuni/cat/tsundere/soft/cool/maid
       - id: media
         name: Media helper
         prompt: You are good at reading images and sending files.
@@ -139,11 +143,17 @@ Split the single prompt into several switchable personas, each with its own tool
           - qqbot_send_file
 ```
 
+- `expressions.kaomoji`: **kaomoji** (optional; requires an explicit `enabled: true`). Choose a style that matches the persona (`daily`, `genki`, `chuuni`, `cat`, `tsundere`, `soft`, `cool`, `maid`; default `daily`). The style's kaomoji list and usage rules (at most one per reply by default) are merged into the persona prompt — **no tool call needed**.
+  - `enabled`: whether to enable it (default `false`). Explicit opt-in is required because the config schema materializes a default sub-object for every persona — testing for the mere presence of `kaomoji` would silently enable it everywhere.
+  - `maxPerReply`: max kaomoji per reply (1–3, default 1).
+  - `custom`: extra kaomoji (up to 20 entries, ≤32 chars each), appended after the preset list.
+  - The library lives in `src/expressions/kaomoji.ts`; future sticker (image) support will add a `sticker` field to the same `expressions` container without changing the persona shape.
 - `tools` is a **hard** runtime constraint: the persona's agent calls `tools.restrict({ allow })`, so tools outside the whitelist are not even visible to the model (not just discouraged by the prompt).
-  - Omit `tools` to inherit every host tool (default, backwards compatible).
+  - Omit `tools` to use the **default allowlist**: the 7 plugin tools (`qqbot_solve`, `qqbot_describe_image`, `qqbot_send_file`, `qqbot_translate`, `qqbot_summarize`, `qqbot_explain`, `qqbot_rewrite`) plus `ask_user_question` and read-only `web_search` / `web_fetch`.
   - `tools: []` disables all tools for that persona.
-  - Unknown tool names are ignored and logged as warnings.
-  - Switching personas re-applies the binding immediately; `/tools` shows the current binding (admins only).
+  - Persona tool names are intersected with the default allowlist: host tools such as `read`, `write`, `pwsh`, `bash` are never granted (a warning is logged), and unknown names are ignored.
+  - Switching personas re-applies the binding immediately; `/tools` shows the current binding (admins only, diagnostic — hidden from the command menu).
+  - Bind tools in the settings panel: expand a persona card, turn on "limit available tools", then pick from the dropdown (candidates are plugin tools only; chosen ones render as removable chips).
 - Personas are per-chat (group id / direct-chat user id); `/persona <id>` override > `defaultPersona`.
 - Prompt order: `globalPrompt` (80) → identity (82) → persona prompt (85) → tool-permission note (86, when `tools` is set) → memory (87).
 
@@ -243,7 +253,7 @@ Per-chat memory of what was said and how the relationship has progressed, stored
 | `/model` | View or switch model (admins only) |
 | `/preset` | View or switch agent preset (admins only) |
 | `/persona` | List and switch personas per chat (admins only) |
-| `/tools` | Show the current persona's tool binding and host tool list (admins only); `/tools <persona-id>` previews another persona |
+| `/tools` | Diagnostic: show the current persona's tool binding and host tool list (admins only, hidden from the command menu); bind tools from the settings panel dropdown instead |
 | `/memory` | Show per-chat memory and relationship stage (admins only); `/memory add <text>`, `/memory del <n>`, `/memory clear` |
 | `/whoami` | Show your openid and resolved identity for the current chat |
 | `/stop` | Abort the current generation (admins only, hidden from help) |
@@ -323,7 +333,10 @@ Resolution strategy: in-process reuse → persisted resume → fresh create.
 - **Markdown output** — replies sent as Markdown with code-block/table-aware chunking
 - **Image understanding** — supports `qqbot_describe_image` vision to analyze images sent by users
 - **Problem solving** — supports `qqbot_solve` to solve exam/homework problems (question text or screenshot, using the session's current model) and returns a fixed answer + worked-steps layout
+- **Text utilities** — `qqbot_translate`, `qqbot_summarize`, `qqbot_explain` (concepts/code/errors) and `qqbot_rewrite` polish, all using the session's current model with no extra dependencies
+- **Kaomoji** — personas can enable `expressions.kaomoji` with a mood-grouped style (daily / genki / chuuni / cat / tsundere / soft / cool / maid); rules are injected into the prompt, no tool call required
 - **File sending** — supports `qqbot_send_file` to send local files to users (path allowlist enabled by default)
+- **Safe tool defaults** — QQ sessions only allow plugin tools plus read-only web access and question prompts; host file-system and shell tools stay off-limits
 - **Question interaction** — supports `ask_user_question` with inline keyboard buttons (mutually exclusive) or numbered replies, one question at a time with timeout
 - **Approval confirmation** — supports `approval/request` to ask for user confirmation on critical actions via allow/deny buttons
 

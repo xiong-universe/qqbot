@@ -55,4 +55,9 @@ describe('buildCommandList — 权限包装', () => {
     const { commands, ctx } = build([]);
     expect(findCommand(commands, 'model')?.authorized?.(ctx('SOMEONE'))).toBe(true);
   });
+
+  it('/tools 是诊断命令：不进命令菜单，但管理员仍可手动调用', () => {
+    const { commands } = build([OWNER]);
+    expect(findCommand(commands, 'tools')?.hidden).toBe(true);
+  });
 });

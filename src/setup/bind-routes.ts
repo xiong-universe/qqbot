@@ -21,6 +21,13 @@ import {
 import { getProfileDir } from '../shared/index.ts';
 import { AccessControlSchema } from '../config.ts';
 import {
+  findKaomojiStyle,
+  MAX_KAOMOJI_CUSTOM,
+  MAX_KAOMOJI_ITEM_CHARS,
+  MAX_KAOMOJI_PER_REPLY,
+  MIN_KAOMOJI_PER_REPLY,
+} from '../expressions/kaomoji.ts';
+import {
   BIND_CONFIG_PATH,
   BIND_MANUAL_PATH,
   BIND_REFRESH_PATH,
@@ -81,6 +88,11 @@ export interface BindRoutesOptions {
    * 用于 GET 回显（appSecret 剔除后返回）。
    */
   currentConfig?: () => Record<string, unknown>;
+  /**
+   * 宿主此刻可用的工具名（GET 时实时求值，供面板的人格工具下拉）。
+   * 缺省或返回空数组时响应不带 `tools` 字段（老客户端兼容）。
+   */
+  availableTools?: () => string[];
   /**
    * 配置写入处理（默认：最小合并写入 profile patch）。
    */
@@ -187,8 +199,98 @@ function personaToolsSchema(value: unknown, index: number): string[] {
   return result;
 }
 
-/** 人格预设数组校验：id 形态/唯一、名称与 prompt 长度、工具白名单；返回规范化的数组 */
-function personasSchema(value: unknown): Array<{ id: string; name: string; prompt: string; tools?: string[] }> {
+/** 自定义颜文字：去空、去重、限长、限量；返回空数组表示未配置 */
+function personaKaomojiCustomSchema(value: unknown, index: number): string[] {
+  if (!Array.isArray(value)) throw new TypeError(`personas[${index}].expressions.kaomoji.custom 必须是数组`);
+  if (value.length > MAX_KAOMOJI_CUSTOM) {
+    throw new TypeError(`personas[${index}].expressions.kaomoji.custom 最多 ${MAX_KAOMOJI_CUSTOM} 条`);
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      throw new TypeError(`personas[${index}].expressions.kaomoji.custom 只能是字符串`);
+    }
+    const text = item.trim().slice(0, MAX_KAOMOJI_ITEM_CHARS);
+    if (text === '' || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
+
+/** 人格表达方式：只做最小规范化；必须显式 `enabled: true` 才算开启 */
+function personaExpressionsSchema(
+  value: unknown,
+  index: number,
+): { kaomoji?: { enabled: true; style?: string; custom?: string[]; maxPerReply?: number } } | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`personas[${index}].expressions 必须是对象`);
+  }
+  const record = value as Record<string, unknown>;
+  const raw = record.kaomoji;
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError(`personas[${index}].expressions.kaomoji 必须是对象`);
+  }
+  const kaomoji = raw as Record<string, unknown>;
+
+  if (kaomoji.enabled !== undefined && typeof kaomoji.enabled !== 'boolean') {
+    throw new TypeError(`personas[${index}].expressions.kaomoji.enabled 必须是布尔值`);
+  }
+
+  let style: string | undefined;
+  if (kaomoji.style !== undefined && kaomoji.style !== null) {
+    if (typeof kaomoji.style !== 'string') {
+      throw new TypeError(`personas[${index}].expressions.kaomoji.style 必须是字符串`);
+    }
+    style = kaomoji.style.trim() || undefined;
+    if (style !== undefined && findKaomojiStyle(style) === undefined) {
+      throw new TypeError(`personas[${index}].expressions.kaomoji.style 未知风格: ${style}`);
+    }
+  }
+
+  let maxPerReply: number | undefined;
+  if (kaomoji.maxPerReply !== undefined && kaomoji.maxPerReply !== null) {
+    const n = kaomoji.maxPerReply;
+    if (typeof n !== 'number' || !Number.isFinite(n)) {
+      throw new TypeError(`personas[${index}].expressions.kaomoji.maxPerReply 必须是数字`);
+    }
+    if (n < MIN_KAOMOJI_PER_REPLY || n > MAX_KAOMOJI_PER_REPLY) {
+      throw new TypeError(
+        `personas[${index}].expressions.kaomoji.maxPerReply 必须在 ${MIN_KAOMOJI_PER_REPLY}–${MAX_KAOMOJI_PER_REPLY} 之间`,
+      );
+    }
+    maxPerReply = Math.round(n);
+  }
+
+  const custom = kaomoji.custom === undefined || kaomoji.custom === null
+    ? []
+    : personaKaomojiCustomSchema(kaomoji.custom, index);
+
+  // GET 回显会把默认子对象物化成 enabled:false；这里统一丢弃，
+  // 避免把「默认物化对象」写回 patch，也避免误开启所有人格。
+  if (kaomoji.enabled !== true) return undefined;
+
+  return {
+    kaomoji: {
+      enabled: true,
+      ...(style !== undefined ? { style } : {}),
+      ...(custom.length > 0 ? { custom } : {}),
+      ...(maxPerReply !== undefined ? { maxPerReply } : {}),
+    },
+  };
+}
+
+/** 人格预设数组校验：id 形态/唯一、名称与 prompt 长度、工具白名单与表达方式；返回规范化的数组 */
+function personasSchema(value: unknown): Array<{
+  id: string;
+  name: string;
+  prompt: string;
+  tools?: string[];
+  expressions?: { kaomoji?: { enabled: true; style?: string; custom?: string[]; maxPerReply?: number } };
+}> {
   if (!Array.isArray(value)) throw new TypeError('personas 必须是数组');
   if (value.length > MAX_PERSONAS) throw new TypeError(`personas 最多 ${MAX_PERSONAS} 条`);
   const seen = new Set<string>();
@@ -212,7 +314,14 @@ function personasSchema(value: unknown): Array<{ id: string; name: string; promp
     const tools = record.tools === undefined || record.tools === null
       ? undefined
       : personaToolsSchema(record.tools, index);
-    return { id, name: name || id, prompt, ...(tools !== undefined ? { tools } : {}) };
+    const expressions = personaExpressionsSchema(record.expressions, index);
+    return {
+      id,
+      name: name || id,
+      prompt,
+      ...(tools !== undefined ? { tools } : {}),
+      ...(expressions !== undefined ? { expressions } : {}),
+    };
   });
 }
 
@@ -553,7 +662,9 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, options: 
     const current = options.currentConfig?.() ?? {};
     // appSecret 永不回传；其余（含只读 cwd）原样回显
     const { appSecret: _s, ...safe } = current;
-    sendJson(res, 200, { config: safe });
+    // 工具候选清单（面板下拉用）：运行时为空时不带该字段，老客户端不受影响
+    const toolNames = options.availableTools?.() ?? [];
+    sendJson(res, 200, toolNames.length > 0 ? { config: safe, tools: toolNames } : { config: safe });
     return;
   }
 
