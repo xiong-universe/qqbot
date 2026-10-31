@@ -68,6 +68,29 @@ export function normalizeVoiceInstruction(
 }
 
 /**
+ * 「像真人发语音」的通用提示：追加在情感指令后面。
+ *
+ * 音色再像人，静态的朗读指令也会带出播音腔——同一句话在微信里是随口说的，
+ * 不是念稿。这条只描述「怎么说」，不改变情绪，因此可以和清冷 / 元气等人格
+ * 指令叠加使用。
+ */
+export const NATURAL_SPEECH_HINT = '像发微信语音一样随口说，自然一点，不要播音腔、不要朗读腔';
+
+/**
+ * 组装最终下发给 TTS 的 instruction：人格/单轮指令 + 自然口语提示。
+ *
+ * 总长度受 `MAX_VOICE_INSTRUCTION_LEN` 限制；超长时优先保留提示语，
+ * 因为「不要播音腔」正是解决「听起来像 AI 念稿」的关键一句。
+ */
+export function buildSpeechInstruction(base?: string): string {
+  const room = MAX_VOICE_INSTRUCTION_LEN - NATURAL_SPEECH_HINT.length - 1;
+  const normalized = normalizeVoiceInstruction(base);
+  if (normalized === undefined || room <= 0) return NATURAL_SPEECH_HINT;
+  const head = normalized.length > room ? normalized.slice(0, room).trimEnd() : normalized;
+  return head === '' ? NATURAL_SPEECH_HINT : `${head}；${NATURAL_SPEECH_HINT}`;
+}
+
+/**
  * 解析语音配置；`apiKey` 为空时返回 undefined（= 语音关闭）。
  *
  * 模型/音色为空时回落到缺省值，避免面板里清空后合成直接失败。
@@ -173,6 +196,45 @@ const SPEECH_TAG_BODY = SPEECH_EMOTION_TAGS.join('|');
 const SPEECH_TAG_SPLIT = new RegExp(`(\\[(?:${SPEECH_TAG_BODY})\\])`, 'gi');
 const SPEECH_TAG = new RegExp(`^\\[(?:${SPEECH_TAG_BODY})\\]$`, 'i');
 
+/** 句末标点：TTS 靠它收尾，缺了会读得很平 */
+const TERMINAL_PUNCT = /[。！？!?…]/;
+
+/**
+ * 规范朗读用的标点。
+ *
+ * - 去掉中文标点两侧的空白：空白会被 TTS 当成停顿，听起来一顿一顿
+ * - 合并 `。。` / `，，`，把「逗号+句号」收敛成一个句号
+ * - 句首悬挂的标点直接丢掉，避免一开口就是逗号
+ */
+function tidySpeechPunctuation(text: string): string {
+  return text
+    .replace(/[ \t\u3000]+([，。！？、；：…])/g, '$1')
+    .replace(/([，。！？、；：…])[ \t\u3000]+/g, '$1')
+    .replace(/。{2,}/g, '。')
+    .replace(/，{2,}/g, '，')
+    .replace(/[，、；：]+([。！？…])/g, '$1')
+    .replace(/。([，、；：])+/g, '。')
+    .replace(/。+([！？…])/g, '$1')
+    .replace(/[！？…]+。/g, (match) => match.slice(0, -1))
+    .replace(/^[，。、；：！？…]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * 句尾补标点（保留末尾的情感标签，标点插在标签之前）。
+ *
+ * 「晚安」和「晚安。」在 TTS 里是两种语调：没有句末标点，引擎会把一句话
+ * 读成平的陈述；补上句号才有收尾的降调，听感更像真人说完一句。
+ */
+function ensureTerminalPunctuation(text: string): string {
+  const tail = text.match(/\[[^\]]*\]\s*$/);
+  const tag = tail?.[0] ?? '';
+  const body = (tail === null ? text : text.slice(0, tail.index)).trimEnd();
+  if (body === '' || TERMINAL_PUNCT.test(body.slice(-1))) return `${body}${tag}`;
+  return `${body}。${tag}`;
+}
+
 /** 清洗一段不含白名单标签的正文（去掉不该念的东西） */
 function cleanSpeechChunk(chunk: string): string {
   const stripped = chunk
@@ -190,21 +252,20 @@ function cleanSpeechChunk(chunk: string): string {
     .replace(/【[^【】]*】/g, ' ')
     .replace(/\[[^[\]]*\]/g, ' ')
     .replace(/\*[^*\n]*\*/g, ' ')
-    // 固定分隔符 ||| 与其它竖线：当成句间停顿
-    .replace(/\|+/g, '，')
-    // 换行：语音是一条完整的话，不按气泡念
-    .replace(/\r?\n+/g, ' ')
+    // 固定分隔符 ||| 与换行都是「一句话说完了」：当句子边界（句号）而不是逗号，
+    // 否则几句气泡会被连成一段长句，TTS 只能一口气念完，听着像念稿
+    .replace(/\|+/g, '。')
+    .replace(/\r?\n+/g, '。')
     // Markdown 标题/列表/强调符号
     .replace(/[#*_~>]+/g, ' ');
 
   // 只保留可朗读字符（颜文字括号内的一堆符号会被清掉）
   const kept = (stripped.match(SPEECH_CHARS) ?? []).join('')
     .replace(/\s+/g, ' ')
-    .replace(/，\s*，/g, '，')
     .trim();
 
   if (kept === '' || !SPEECH_CONTENT.test(kept)) return '';
-  return kept;
+  return tidySpeechPunctuation(kept);
 }
 
 /**
@@ -214,9 +275,11 @@ function cleanSpeechChunk(chunk: string): string {
  * - 去掉舞台指示：括号动作（`（小声）`、`(sighs)`）、`【突然】` 这类情绪标记、
  *   `*叹气*` 星号动作——TTS 会把里面的字念出来，而它们只是给读者看的注释
  * - 白名单内的服务端情感标签（`[whispers]` 等）保留，供 TTS 逐句表演
- * - `|||` 是 QQ 的分条分隔符：语音是一条完整的话，这里换成逗号当停顿
- * - 换行同样合并（语音不按气泡朗读），Markdown 符号与颜文字整体剔除
- * - 折叠空白，按 `maxChars` 截断（截断处不会切坏情感标签）
+ * - `|||` 是 QQ 的分条分隔符、换行是气泡边界：两者都当句号，让 TTS 逐句换气
+ * - 规范标点（合并重复、去掉标点旁的空格），句尾补句号——这是「像真人说话」
+ *   最直接的一步：没有句末标点，TTS 会把整段读成平的陈述句
+ * - Markdown 符号与颜文字整体剔除，按 `maxChars` 截断（优先停在句末，
+ *   且不会切坏情感标签）
  *
  * 返回空字符串表示本轮没有可朗读内容（调用方应跳过语音）。
  */
@@ -231,11 +294,23 @@ export function cleanTextForSpeech(text: string, maxChars: number): string {
     .trim();
 
   if (assembled === '' || !SPEECH_CONTENT.test(assembled.replace(/\[[^\]]*\]/g, ''))) return '';
-  if (assembled.length <= limit) return assembled;
+  const normalized = ensureTerminalPunctuation(tidySpeechPunctuation(assembled));
+  if (normalized.length <= limit) return normalized;
 
-  // 截断：若切在标签中间，回退到标签起点，避免下发半个 "[whisp"
-  let cut = assembled.slice(0, limit);
+  // 截断优先停在句末：半句话被硬切，TTS 会用上扬的语调收尾，很像机器
+  const head = normalized.slice(0, limit);
+  const stop = Math.max(
+    head.lastIndexOf('。'), head.lastIndexOf('！'), head.lastIndexOf('？'),
+    head.lastIndexOf('…'), head.lastIndexOf('!'), head.lastIndexOf('?'),
+  );
+  if (stop !== -1 && stop + 1 >= Math.ceil(limit * 0.6)) {
+    return ensureTerminalPunctuation(tidySpeechPunctuation(head.slice(0, stop + 1)));
+  }
+
+  // 否则硬截断（留一个字符给句末标点）；若切在标签中间，回退到标签起点
+  let cut = normalized.slice(0, Math.max(1, limit - 1));
   const open = cut.lastIndexOf('[');
   if (open !== -1 && cut.indexOf(']', open) === -1) cut = cut.slice(0, open);
-  return cut.trimEnd();
+  cut = cut.trimEnd();
+  return cut === '' ? '' : ensureTerminalPunctuation(tidySpeechPunctuation(cut));
 }

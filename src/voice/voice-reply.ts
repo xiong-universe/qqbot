@@ -14,6 +14,7 @@ import type { Logger } from '../types.ts';
 import { MEDIA_ROOT } from '../media/media-cleaner.ts';
 import { isSpeechWebSocketAvailable, synthesizeSpeech } from './tts.ts';
 import {
+  buildSpeechInstruction,
   cleanTextForSpeech,
   normalizeVoiceInstruction,
   resolveVoiceSettings,
@@ -92,7 +93,11 @@ export class VoiceSpeaker {
 
     const persona = this.manager.getEffectivePersona(record.scope, record.peerId);
     const tuning = resolveVoiceTuning(this.settings, persona?.expressions?.voice);
-    const instruction = normalizeVoiceInstruction(record.voiceInstruction) ?? tuning.instruction;
+    // 单轮语气 > 人格 > 全局；再统一追加「像发微信语音、不要播音腔」的口语提示，
+    // 否则静态的朗读指令会把每一句都念成同一种播报腔
+    const instruction = buildSpeechInstruction(
+      normalizeVoiceInstruction(record.voiceInstruction) ?? tuning.instruction,
+    );
 
     let audio: Buffer;
     try {
@@ -104,7 +109,7 @@ export class VoiceSpeaker {
         ...(this.settings.workspace !== undefined ? { workspace: this.settings.workspace } : {}),
         ...(tuning.rate !== undefined ? { rate: tuning.rate } : {}),
         ...(tuning.volume !== undefined ? { volume: tuning.volume } : {}),
-        ...(instruction !== undefined ? { instruction } : {}),
+        instruction,
         timeoutMs: this.settings.timeoutMs,
       });
     } catch (err) {
@@ -119,7 +124,7 @@ export class VoiceSpeaker {
       await this.sender.sendVoice(record.replyTarget, { localPath: filePath });
       this.logger.info(
         `im-qqbot: 已发送语音 voice=${tuning.voice} bytes=${audio.length} chars=${speech.length}`
-        + ` instruction=${instruction === undefined ? '无' : '有'}`,
+        + ` instruction=${instruction.length}字`,
       );
       return true;
     } catch (err) {

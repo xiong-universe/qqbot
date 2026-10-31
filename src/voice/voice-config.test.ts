@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  NATURAL_SPEECH_HINT,
+  buildSpeechInstruction,
   cleanTextForSpeech,
   normalizeVoiceInstruction,
   resolveVoiceSettings,
@@ -136,8 +138,25 @@ describe('resolveVoiceTuning', () => {
   });
 });
 
+describe('buildSpeechInstruction（自然口语提示）', () => {
+  it('未配置语气时只下发自然提示', () => {
+    expect(buildSpeechInstruction()).toBe(NATURAL_SPEECH_HINT);
+    expect(buildSpeechInstruction('   ')).toBe(NATURAL_SPEECH_HINT);
+  });
+
+  it('人格/单轮语气在前，自然提示追加在后', () => {
+    expect(buildSpeechInstruction('带点笑意')).toBe(`带点笑意；${NATURAL_SPEECH_HINT}`);
+  });
+
+  it('超长语气被裁剪，总长不超过上限且提示语完整保留', () => {
+    const text = buildSpeechInstruction('柔'.repeat(MAX_VOICE_INSTRUCTION_LEN));
+    expect(text.endsWith(NATURAL_SPEECH_HINT)).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(MAX_VOICE_INSTRUCTION_LEN);
+  });
+});
+
 describe('cleanTextForSpeech', () => {
-  it('去掉分隔符/代码块/URL/Markdown 与颜文字，||| 变成停顿', () => {
+  it('去掉分隔符/代码块/URL/Markdown 与颜文字，||| 与换行都当句号', () => {
     const text = [
       '真的假的|||你别骗我',
       '```ts',
@@ -146,36 +165,54 @@ describe('cleanTextForSpeech', () => {
       '看这个 https://example.com/a',
       '(｡•́︿•̀｡) 好耶',
     ].join('\n');
-    expect(cleanTextForSpeech(text, 300)).toBe('真的假的，你别骗我 看这个 好耶');
+    expect(cleanTextForSpeech(text, 300)).toBe('真的假的。你别骗我。看这个。好耶。');
   });
 
   it('舞台指示不念：括号动作、方括号情绪标签、星号动作整段剔除', () => {
-    expect(cleanTextForSpeech('（小声）别闹，我有点困了', 300)).toBe('别闹，我有点困了');
-    expect(cleanTextForSpeech('【突然】你吓我一跳', 300)).toBe('你吓我一跳');
-    expect(cleanTextForSpeech('*叹气* 好吧，我陪你说会儿话', 300)).toBe('好吧，我陪你说会儿话');
-    expect(cleanTextForSpeech('乖，别哭（摸摸头）（笑）', 300)).toBe('乖，别哭');
+    expect(cleanTextForSpeech('（小声）别闹，我有点困了', 300)).toBe('别闹，我有点困了。');
+    expect(cleanTextForSpeech('【突然】你吓我一跳', 300)).toBe('你吓我一跳。');
+    expect(cleanTextForSpeech('*叹气* 好吧，我陪你说会儿话', 300)).toBe('好吧，我陪你说会儿话。');
+    expect(cleanTextForSpeech('乖，别哭（摸摸头）（笑）', 300)).toBe('乖，别哭。');
   });
 
-  it('语音不按气泡念：换行合并成一句', () => {
-    expect(cleanTextForSpeech('晚安\n早点睡\n明天见', 300)).toBe('晚安 早点睡 明天见');
+  it('语音按句断句：换行变成句子边界，而不是空格连读', () => {
+    expect(cleanTextForSpeech('晚安\n早点睡\n明天见', 300)).toBe('晚安。早点睡。明天见。');
+  });
+
+  it('多个气泡不会连成一句话：||| 全部变成句号', () => {
+    expect(cleanTextForSpeech('这么黏人啊|||那今天有没有好好吃饭|||别光顾着找我', 300)).toBe('这么黏人啊。那今天有没有好好吃饭。别光顾着找我。');
+  });
+
+  it('句尾没有标点时补句号（TTS 靠句末标点收尾，缺了会读得平）', () => {
+    expect(cleanTextForSpeech('今天过得怎么样', 300)).toBe('今天过得怎么样。');
+    expect(cleanTextForSpeech('乖，别哭', 300)).toBe('乖，别哭。');
+  });
+
+  it('重复标点被合并，标点旁的空格被去掉', () => {
+    expect(cleanTextForSpeech('真的假的？？\n\n你别骗我 ，。', 300)).toBe('真的假的？？你别骗我。');
   });
 
   it('白名单情感标签保留给 TTS；其它方括号标记整体丢弃', () => {
-    expect(cleanTextForSpeech('别闹[whispers]快睡', 300)).toBe('别闹[whispers]快睡');
-    expect(cleanTextForSpeech('[excited]真的假的|||你别骗我', 300)).toBe('[excited]真的假的，你别骗我');
+    expect(cleanTextForSpeech('别闹[whispers]快睡', 300)).toBe('别闹[whispers]快睡。');
+    expect(cleanTextForSpeech('[excited]真的假的|||你别骗我', 300)).toBe('[excited]真的假的。你别骗我。');
     // 非白名单标签不念（否则会念出 pause:1s / 突然）
-    expect(cleanTextForSpeech('你吓我一跳[pause:1s]', 300)).toBe('你吓我一跳');
+    expect(cleanTextForSpeech('你吓我一跳[pause:1s]', 300)).toBe('你吓我一跳。');
   });
 
   it('截断不会切坏情感标签', () => {
-    expect(cleanTextForSpeech('晚安晚安晚安晚安晚安晚安[whispers]', 20)).toBe('晚安晚安晚安晚安晚安晚安');
+    expect(cleanTextForSpeech('晚安晚安晚安晚安晚安晚安[whispers]', 20)).toBe('晚安晚安晚安晚安晚安晚安。');
     expect(cleanTextForSpeech('一二三四五六七八九十一二三四五六七八九十[whispers]好梦', 25))
-      .toBe('一二三四五六七八九十一二三四五六七八九十');
+      .toBe('一二三四五六七八九十一二三四五六七八九十。');
   });
 
-  it('超出上限时截断，且不留尾随空白', () => {
+  it('截断优先停在句末，不硬切半句话', () => {
+    expect(cleanTextForSpeech('今天天气很好。你吃饭了吗。我也刚吃完。晚上早点睡。', 20))
+      .toBe('今天天气很好。你吃饭了吗。我也刚吃完。');
+  });
+
+  it('超出上限且没有句末标点时硬截断，且不留尾随空白', () => {
     const text = '一'.repeat(50);
-    expect(cleanTextForSpeech(text, 20)).toBe('一'.repeat(20));
+    expect(cleanTextForSpeech(text, 20)).toBe(`${'一'.repeat(19)}。`);
   });
 
   it('只有符号/颜文字时返回空字符串（本轮不朗读）', () => {
@@ -185,6 +222,6 @@ describe('cleanTextForSpeech', () => {
   });
 
   it('保留正常标点并折叠空白', () => {
-    expect(cleanTextForSpeech('你好，世界！\n\n  今天过得怎么样？', 300)).toBe('你好，世界！ 今天过得怎么样？');
+    expect(cleanTextForSpeech('你好，世界！\n\n  今天过得怎么样？', 300)).toBe('你好，世界！今天过得怎么样？');
   });
 });

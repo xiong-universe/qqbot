@@ -63,8 +63,9 @@ const DESCRIPTION =
   + 'The reply text you write afterwards is synthesized into speech and is NOT also sent as text, '
   + 'so write it as a line to say out loud: short, colloquial, no stage directions in brackets or asterisks, '
   + 'no "|||" bubbles, no line breaks, no code, links, lists or Markdown. '
-  + 'Put the delivery direction (emotion, pace, volume) into the optional `instruction` argument; '
-  + 'inline emotion tags are only allowed from the whitelist in the voice instructions. '
+  + 'Always pass the optional `instruction` argument with one concrete delivery direction for THIS line '
+  + '(emotion, pace, a smile); falling back to the persona default every time sounds like an announcer reading. '
+  + 'Inline emotion tags are only allowed from the whitelist in the voice instructions. '
   + 'Do not call it for long or technical answers, or for content the user needs to copy — plain text is better there.';
 
 /**
@@ -105,6 +106,8 @@ export function buildVoiceToolMessage(
     '请把要说的话写成回复正文：它会合成为语音发送，不要再重复一遍同样的文字。',
     `正文就是台词：控制在 ${result.maxChars} 字以内，用口语短句；不要用 ||| 或换行分条，`
     + '不要写括号动作或情绪标注（情绪请写进 instruction），也不要 Markdown、代码块、链接或颜文字。',
+    '建议在 instruction 里写清这句怎么说（如「带点笑意」「困了、慢一点」）；不写会沿用默认语气，'
+    + '每一句都用同一种默认语气，听起来容易像念稿。',
     ...(result.instruction === '' ? [] : [`本轮语气：${result.instruction}`]),
   ].join('\n');
 }

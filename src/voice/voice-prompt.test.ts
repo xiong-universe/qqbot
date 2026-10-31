@@ -52,6 +52,15 @@ describe('buildVoicePromptSection', () => {
     expect(text).toContain('[whispers]');
   });
 
+  it('像真人发语音：每次写具体 instruction、口语短句与语气词、不受「不打句号」限制', () => {
+    const text = buildVoicePromptSection({ settings: resolveVoiceSettings(voiceConfig()) })?.text ?? '';
+    expect(text).toContain('每次调用都把 instruction 写具体');
+    expect(text).toContain('像念稿');
+    expect(text).toContain('1–2 个短句');
+    expect(text).toContain('语气词');
+    expect(text).toContain('不打句号');
+  });
+
   it('音色名称来自自定义清单；人格音色覆盖全局音色', () => {
     const section = buildVoicePromptSection({
       settings: resolveVoiceSettings(voiceConfig({

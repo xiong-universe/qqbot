@@ -88,6 +88,7 @@ describe('buildVoiceToolMessage', () => {
     expect(text).toContain('不要再重复');
     expect(text).toContain('200');
     expect(text).toContain('不要用 ||| 或换行分条');
+    expect(text).toContain('像念稿');
     expect(text).not.toContain('本轮语气');
   });
 
