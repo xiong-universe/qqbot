@@ -18,7 +18,15 @@ import {
   updateProfileConfig,
   type SetupCredentials,
 } from './persist.ts';
-import { getProfileDir } from '../shared/index.ts';
+import { getProfileDir, PLUGIN_PACKAGE_NAME, PLUGIN_VERSION } from '../shared/index.ts';
+import {
+  checkForUpdate,
+  inspectInstallation,
+  runUpdate,
+  type InstallationInfo,
+  type UpdateCheckResult,
+  type UpdateRunResult,
+} from '../update/update-service.ts';
 import {
   AccessControlSchema,
   DEFAULT_VOICE_ID,
@@ -53,12 +61,21 @@ import {
   BIND_REFRESH_PATH,
   BIND_STATE_PATH,
   BIND_UNBIND_PATH,
+  BIND_UPDATE_PATH,
   type BindStateWire,
+  type UpdateInstallWire,
 } from '../shared/bind-protocol.ts';
 
 // 协议单一来源：shared/bind-protocol.ts（类型 + 路径常量，客户端共用）
-export { BIND_CONFIG_PATH, BIND_MANUAL_PATH, BIND_REFRESH_PATH, BIND_STATE_PATH, BIND_UNBIND_PATH };
-export type { BindStateWire };
+export {
+  BIND_CONFIG_PATH,
+  BIND_MANUAL_PATH,
+  BIND_REFRESH_PATH,
+  BIND_STATE_PATH,
+  BIND_UNBIND_PATH,
+  BIND_UPDATE_PATH,
+};
+export type { BindStateWire, UpdateInstallWire };
 
 /** dsh-host-webserver 的具名路由注册形状（局部投影，避免硬依赖） */
 export interface WebRoute {
@@ -84,6 +101,23 @@ export interface ManualSubmitResult {
 export interface UnbindResult {
   persisted: boolean;
   error?: string;
+}
+
+/**
+ * 更新页签的行为注入（桌面宿主提供 pnpm 服务时由 setup 层注入）。
+ *
+ * 全部可缺省：缺省时按「只读检查 + 手动命令提示」工作，
+ * 不执行任何安装操作；测试也通过这里替换远端检查与更新执行。
+ */
+export interface UpdateRouteHooks {
+  /** 读取本地安装信息（缺省按 profile + lockfile 识别） */
+  inspect?: () => InstallationInfo;
+  /** 检查远端是否有更新（缺省 git ls-remote / npm registry） */
+  check?: (info: InstallationInfo) => Promise<UpdateCheckResult>;
+  /** 执行更新；提供时 canUpdate 默认为 true */
+  perform?: (info: InstallationInfo) => Promise<UpdateRunResult>;
+  /** 更新成功后的重载（Response 发出后异步调用） */
+  reload?: () => void | Promise<void>;
 }
 
 /** 路由行为注入 */
@@ -117,6 +151,11 @@ export interface BindRoutesOptions {
    * 配置写入处理（默认：最小合并写入 profile patch）。
    */
   onUpdateConfig?: (config: Record<string, unknown>) => boolean;
+  /**
+   * 更新页签行为注入（检查 / 一键更新 / 更新后重载）。
+   * 缺省只用 git / registry 检查，更新仅返回手动命令。
+   */
+  update?: UpdateRouteHooks;
 }
 
 /** 可经 UI 编辑的配置键（白名单：只收用户必要的字段，其余走 patch/env） */
@@ -727,6 +766,42 @@ const MAX_MANUAL_BODY_BYTES = 4096;
  */
 const MAX_CONFIG_BODY_BYTES = 512 * 1024;
 
+/** 更新请求体上限（只含 `{ action: 'check' | 'update' }`） */
+const MAX_UPDATE_BODY_BYTES = 4096;
+
+/** 线上回显：剔除 profileDir（服务端内部字段，只在宿主侧执行更新时使用） */
+function toInstallWire(info: InstallationInfo): UpdateInstallWire {
+  return {
+    packageName: info.packageName,
+    kind: info.kind,
+    version: info.version,
+    installed: info.installed,
+    ...(info.spec !== undefined ? { spec: info.spec } : {}),
+    ...(info.remote !== undefined ? { remote: info.remote } : {}),
+    ...(info.ref !== undefined ? { ref: info.ref } : {}),
+    canUpdate: info.canUpdate,
+    command: info.command,
+    ...(info.message !== undefined ? { message: info.message } : {}),
+  };
+}
+
+/** 合并缺省实现：没有宿主注入时只读检查，更新只返回手动命令 */
+function resolveUpdateHooks(options: BindRoutesOptions): Required<UpdateRouteHooks> {
+  const custom = options.update;
+  const canUpdate = custom?.perform !== undefined;
+  return {
+    inspect: custom?.inspect ?? (() => inspectInstallation({
+      packageName: PLUGIN_PACKAGE_NAME,
+      version: PLUGIN_VERSION,
+      profileDir: getProfileDir(),
+      canUpdate,
+    })),
+    check: custom?.check ?? ((info) => checkForUpdate(info)),
+    perform: custom?.perform ?? ((info) => runUpdate(info)),
+    reload: custom?.reload ?? (() => {}),
+  };
+}
+
 /**
  * 注册绑定路由（状态查询 / 刷新二维码 / 手动凭据）。
  *
@@ -773,6 +848,11 @@ export function registerBindRoutes(
       kind: 'exact',
       path: BIND_CONFIG_PATH,
       handler: (req, res) => handleConfig(req, res, options),
+    }),
+    webServer.register({
+      kind: 'exact',
+      path: BIND_UPDATE_PATH,
+      handler: (req, res) => handleUpdate(req, res, resolveUpdateHooks(options), logger),
     }),
   ];
   logger.info(`im-qqbot: 端内绑定页已就绪: ${BIND_STATE_PATH}`);
@@ -1017,4 +1097,108 @@ async function handleConfig(req: IncomingMessage, res: ServerResponse, options: 
     return;
   }
   sendJson(res, 200, { ok: true, message: '配置已保存，插件将自动重载（进行中的机器人会话将重置）' });
+}
+
+/** 更新成功后异步触发重载：先让 HTTP 响应落地，再替换模块 */
+function scheduleUpdateReload(hooks: Required<UpdateRouteHooks>, logger: Logger): void {
+  const timer = setTimeout(() => {
+    Promise.resolve(hooks.reload()).catch((err: unknown) => {
+      logger.warn(`im-qqbot: 更新后自动重载失败（请重启 DSH）: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, 300);
+  (timer as unknown as { unref?: () => void }).unref?.();
+}
+
+/**
+ * 插件更新检查与执行：
+ * - GET：读取本地安装信息（安装方式 / 已装引用 / 是否支持一键更新）
+ * - POST `{ action: 'check' }`：对比远端（git ls-remote / npm registry）
+ * - POST `{ action: 'update' }`：执行 `pnpm update`，成功后触发 HMR 重载
+ */
+async function handleUpdate(
+  req: IncomingMessage,
+  res: ServerResponse,
+  hooks: Required<UpdateRouteHooks>,
+  logger: Logger,
+): Promise<void> {
+  if (!trusted(req)) {
+    sendJson(res, 403, { error: 'forbidden' });
+    return;
+  }
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    try {
+      sendJson(res, 200, { ok: true, install: toInstallWire(hooks.inspect()) });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: `读取安装信息失败：${err instanceof Error ? err.message : String(err)}` });
+    }
+    return;
+  }
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'method not allowed' });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req, MAX_UPDATE_BODY_BYTES);
+  } catch (err) {
+    sendJson(res, 400, {
+      ok: false,
+      error: `invalid request body: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return;
+  }
+  const action = typeof body === 'object' && body !== null
+    ? (body as { action?: unknown }).action
+    : undefined;
+  if (action !== 'check' && action !== 'update') {
+    sendJson(res, 400, { ok: false, error: 'action 必须是 check 或 update' });
+    return;
+  }
+
+  let info: InstallationInfo;
+  try {
+    info = hooks.inspect();
+  } catch (err) {
+    sendJson(res, 500, { ok: false, error: `读取安装信息失败：${err instanceof Error ? err.message : String(err)}` });
+    return;
+  }
+
+  if (action === 'check') {
+    try {
+      const check = await hooks.check(info);
+      sendJson(res, 200, {
+        ok: true,
+        install: toInstallWire(info),
+        check,
+        message: check.message,
+      });
+    } catch (err) {
+      // 检查失败（网络/认证/不支持）不是致命错误：保留安装信息供面板展示原因
+      sendJson(res, 200, {
+        ok: false,
+        install: toInstallWire(info),
+        error: `检查更新失败：${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+    return;
+  }
+
+  const result = await hooks.perform(info);
+  if (!result.ok) {
+    sendJson(res, 500, { ok: false, install: toInstallWire(info), error: result.message });
+    return;
+  }
+
+  // 更新可能改写 lockfile：重新读一次；失败时保留旧信息（不影响成功提示）
+  let next = info;
+  try {
+    next = hooks.inspect();
+  } catch { /* 保留旧信息 */ }
+  sendJson(res, 200, {
+    ok: true,
+    install: toInstallWire(next),
+    message: '更新完成，插件正在重载；若界面没有自动刷新，请重启 DSH。',
+  });
+  scheduleUpdateReload(hooks, logger);
 }

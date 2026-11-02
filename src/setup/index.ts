@@ -15,10 +15,11 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Logger } from '../types.ts';
 import { BindingService } from './binding-service.ts';
-import { registerBindRoutes, type WebServerLike } from './bind-routes.ts';
+import { registerBindRoutes, type UpdateRouteHooks, type WebServerLike } from './bind-routes.ts';
 import { createBrowserPresenter, createTerminalPresenter, isDesktopHost } from './presenters.ts';
 import { persistCredentialsToProfile, type SetupCredentials } from './persist.ts';
 import { getProfileDir } from '../shared/index.ts';
+import { runUpdate, type InstallationInfo } from '../update/update-service.ts';
 
 export type { SetupCredentials } from './persist.ts';
 export { persistCredentialsToProfile } from './persist.ts';
@@ -98,6 +99,7 @@ export async function ensureCredentials(
       },
       currentConfig: () => options.config,
       availableTools: options.availableTools,
+      update: createUpdateHooks(ctx, logger),
     });
     // 回调作用域（服务卸载/替换、插件卸载）连带注销路由
     (scoped as unknown as { effect(fn: () => () => void, name?: string): void }).effect(() => {
@@ -131,6 +133,7 @@ export function registerBoundCredentialRoutes(
       onManualCredentials: (credentials) => persistCredentials(credentials, logger),
       currentConfig: () => config,
       availableTools,
+      update: createUpdateHooks(ctx, logger),
     });
     (scoped as unknown as { effect(fn: () => () => void, name?: string): void }).effect(() => {
       return disposeRoutes;
@@ -144,4 +147,85 @@ function persistCredentials(credentials: SetupCredentials, logger: Logger): { pe
   return persisted
     ? { persisted: true }
     : { persisted: false, error: '无法定位 profile 目录或写入失败，请改用环境变量配置' };
+}
+
+/** 桌面宿主 `desktopPnpm` 服务（局部投影，避免硬依赖宿主包） */
+interface DesktopPnpmLike {
+  runPlugin(argv: string[], invokingDir: string, signal?: AbortSignal): {
+    stdout?: { on?: (event: 'data', listener: (chunk: unknown) => void) => unknown };
+    stderr?: { on?: (event: 'data', listener: (chunk: unknown) => void) => unknown };
+    done: Promise<{ exitCode: number | null; signal?: string | null }>;
+    cancel?: () => void;
+  };
+}
+
+/** 宿主 HMR 服务（局部投影；模块替换必须包在 runExclusive 内） */
+interface HmrLike {
+  runExclusive?: (operation: () => Promise<unknown>) => Promise<unknown>;
+  reconcileProfile?: (requiredIds?: string[]) => Promise<unknown>;
+}
+
+/** 读取宿主服务（不存在或访问受限时返回 undefined，不抛错） */
+function serviceOf<T>(ctx: Context, serviceName: string): T | undefined {
+  try {
+    const get = (ctx as unknown as { get?: (name: string) => unknown }).get;
+    return get?.call(ctx, serviceName) as T | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 更新页签的宿主能力注入。
+ *
+ * 桌面版通过 `desktopPnpm.runPlugin` 执行 `dsh plugin --profile <name> update <pkg>`
+ * （内部即 pnpm update，会重新解析 git 远端 commit）；更新成功后调用 HMR
+ * `reconcileProfile` 让磁盘上的新版本即时生效。CLI / 无该服务时不注入
+ * perform，面板只展示手动命令。
+ */
+function createUpdateHooks(ctx: Context, logger: Logger): UpdateRouteHooks {
+  const pnpm = serviceOf<DesktopPnpmLike>(ctx, 'desktopPnpm');
+  if (pnpm?.runPlugin === undefined) return {};
+
+  const runner = async (argv: string[], cwd: string): Promise<{ exitCode: number | null; output?: string }> => {
+    const handle = pnpm.runPlugin(argv, cwd);
+    // 持续读取输出：一是避免管道背压，二是失败时把 pnpm 报错尾部带回面板
+    const chunks: string[] = [];
+    let size = 0;
+    const collect = (chunk: unknown): void => {
+      const text = typeof chunk === 'string'
+        ? chunk
+        : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : '';
+      if (text === '') return;
+      chunks.push(text);
+      size += text.length;
+      while (size > 2000 && chunks.length > 0) {
+        size -= chunks.shift()!.length;
+      }
+    };
+    handle.stdout?.on?.('data', collect);
+    handle.stderr?.on?.('data', collect);
+    const outcome = await handle.done;
+    return { exitCode: outcome?.exitCode ?? null, output: chunks.join('') };
+  };
+
+  return {
+    perform: (info: InstallationInfo) => runUpdate(info, runner),
+    reload: () => reloadProfileAfterUpdate(ctx, logger),
+  };
+}
+
+/** 更新完成后重组合 profile：失败只告警（响应已提示可重启 DSH） */
+async function reloadProfileAfterUpdate(ctx: Context, logger: Logger): Promise<void> {
+  const hmr = serviceOf<HmrLike>(ctx, 'hmr');
+  if (hmr?.runExclusive === undefined || hmr.reconcileProfile === undefined) {
+    logger.info('im-qqbot: 宿主未提供 HMR，插件更新后需重启 DSH 生效');
+    return;
+  }
+  try {
+    await hmr.runExclusive(() => hmr.reconcileProfile!());
+    logger.info('im-qqbot: 插件更新完成，已触发 HMR 重载');
+  } catch (err) {
+    logger.warn(`im-qqbot: 更新后 HMR 重载失败（请重启 DSH）: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }

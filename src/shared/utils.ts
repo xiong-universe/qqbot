@@ -12,16 +12,25 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PLUGIN_ROOT = resolve(__dirname, '../..');
 
-/** 插件版本号（从 package.json 读取，供 help/version 等展示真实版本） */
-export const PLUGIN_VERSION = readPluginVersion();
+/** 插件清单信息（从 package.json 读取；读取失败时用安全兜底） */
+const PLUGIN_MANIFEST = readPluginManifest();
 
-function readPluginVersion(): string {
+/** 插件版本号（从 package.json 读取，供 help/version 等展示真实版本） */
+export const PLUGIN_VERSION = PLUGIN_MANIFEST.version;
+
+/** 插件包名（更新检查按 profile 依赖名定位安装方式） */
+export const PLUGIN_PACKAGE_NAME = PLUGIN_MANIFEST.name;
+
+function readPluginManifest(): { name: string; version: string } {
   try {
     const pkgPath = resolve(PLUGIN_ROOT, 'package.json');
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string };
-    return pkg.version ?? '0.0.0';
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { name?: string; version?: string };
+    return {
+      name: pkg.name ?? '@tencent-connect/dsh-qqbot',
+      version: pkg.version ?? '0.0.0',
+    };
   } catch {
-    return '0.0.0';
+    return { name: '@tencent-connect/dsh-qqbot', version: '0.0.0' };
   }
 }
 

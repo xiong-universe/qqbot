@@ -102,6 +102,19 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 > 安装 fork 版前请先卸载官方 `@tencent-connect/dsh-qqbot`，避免同一 profile 内出现两份实例。
 
+## 检测与更新
+
+安装后升级不需要卸载重装：设置面板新增了「插件更新」页签（左下角头像 → 设置 →「QQ 机器人」→「插件更新」）。
+
+- **检查更新**：插件读取 profile 里的依赖写法与 `pnpm-lock.yaml` 中的已装引用，再对比远端——git 安装对比远端最新 commit（`git ls-remote`），npm 安装对比 registry 的 `latest` 版本。
+- **一键更新**：桌面版通过宿主 `desktopPnpm` 执行 `dsh plugin --profile <name> update @tencent-connect/dsh-qqbot`（内部即 `pnpm update`，会重新解析 git 远端 commit 并改写 lockfile），完成后自动触发 HMR 重载，新版本立即生效。
+- **手动更新**（CLI 或宿主未提供 pnpm 服务时）：
+  ```bash
+  npx @deepseek-ai/dsh plugin --profile qqbot update @tencent-connect/dsh-qqbot
+  ```
+- **不支持自更新的安装方式**：`file:` / `link:` 本地路径安装、`--patch` 源码直载会提示「更新源码后重启」；依赖写法固定到具体 commit（`#<sha>`）时不会跟随远端更新，需要先把 ref 改回分支名。
+- 更新依赖 `pnpm update` 成功返回；若新版本与当前 DSH 运行时版本不兼容，宿主会回滚 `package.json` / `pnpm-lock.yaml` 并在页签里显示原因（可按提示执行 `dsh plugin --profile <name> allow-version ...` 后重试）。
+
 ## 配置项
 
 | 配置 | 类型 | 默认值 | 说明 |

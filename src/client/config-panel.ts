@@ -2,8 +2,9 @@
  * QQ 机器人配置面板 — 必要配置的 UI 编辑
  *
  * UI 复刻 DSW 通用设置（settings-form 原语）的视觉风格：
- * 配置按「服务 / 身份 / 记忆 / 对话 / 模型 / 人格」六个分区呈现，
+ * 配置按「服务范围 / 身份与权限 / 记忆与关系 / 对话设置 / 语音回复 / 模型与提示词 / 人格预设」七个分区呈现；
  * 一次只渲染一个分区，避免单列过长；每个分区有未保存修改时 tab 显示小圆点。
+ * 另有一个不写入配置的「插件更新」页签：检查远端版本并执行一键更新。
  * 左对齐设置列、0.5px 行分隔、label 13px/500、控件右置；
  * Switch 为 36×20 aria-checked 结构（thumb translateX 动画）；
  * 三值选择用分段控件（滑动指示器按段数/索引的 CSS 变量定位）；
@@ -17,7 +18,13 @@
  * 类字段走 profile patch / 环境变量。
  */
 import { createElement, useCallback, useEffect, useState, type CSSProperties, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
-import { BIND_CONFIG_PATH } from '../shared/bind-protocol.ts';
+import {
+  BIND_CONFIG_PATH,
+  BIND_UPDATE_PATH,
+  type UpdateCheckWire,
+  type UpdateInstallWire,
+  type UpdateStateWire,
+} from '../shared/bind-protocol.ts';
 import { catalogToolNames, groupToolNames, isPluginToolName, mergeToolNames } from '../shared/tool-catalog.ts';
 import { KAOMOJI_STYLES, DEFAULT_KAOMOJI_STYLE, findKaomojiStyle } from '../expressions/kaomoji.ts';
 import { buildVoiceOptions, voiceOptionLabel, type VoiceOption } from '../voice/voice-presets.ts';
@@ -748,7 +755,7 @@ const SPLIT_OPTIONS: ReadonlyArray<{ value: ReplySplitMode; label: string }> = [
 ];
 
 /** 配置分区：每页只展示一组相关配置，避免单列过长 */
-type TabId = 'access' | 'identity' | 'memory' | 'conversation' | 'voice' | 'model' | 'personas';
+type TabId = 'access' | 'identity' | 'memory' | 'conversation' | 'voice' | 'model' | 'personas' | 'update';
 
 interface TabDef {
   id: TabId;
@@ -768,7 +775,24 @@ const TABS: ReadonlyArray<TabDef> = [
   { id: 'voice', label: '语音回复', keys: ['voice'] },
   { id: 'model', label: '模型与提示词', keys: ['provider', 'model', 'preset', 'globalPrompt'] },
   { id: 'personas', label: '人格预设', keys: ['personas', 'defaultPersona'] },
+  // 插件更新不是配置项（keys 为空，永远不会出现「未保存」小圆点）
+  { id: 'update', label: '插件更新', keys: [] },
 ];
+
+/** 安装方式的中文说明 */
+function updateKindLabel(kind: UpdateInstallWire['kind']): string {
+  switch (kind) {
+    case 'git': return 'Git 安装';
+    case 'npm': return 'npm 安装';
+    case 'local': return '本地路径安装';
+    default: return '未知安装方式';
+  }
+}
+
+/** commit 缩写（非 commit 的引用原样返回） */
+function shortHash(ref: string): string {
+  return /^[0-9a-f]{7,40}$/i.test(ref) ? ref.slice(0, 7) : ref;
+}
 
 /** 深比较（表单值与初始回显值的 dirty 判断） */
 function shallowEqual(a: unknown, b: unknown): boolean {
@@ -794,6 +818,13 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
   const [expandedPersonas, setExpandedPersonas] = useState<Set<number>>(() => new Set());
   // 当前配置分区（默认落在最常用的「服务范围」）
   const [activeTab, setActiveTab] = useState<TabId>('access');
+  // 插件更新页签：安装信息 / 远端检查结果 / 操作状态（不参与配置保存）
+  const [updateInfo, setUpdateInfo] = useState<UpdateInstallWire | null>(null);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckWire | null>(null);
+  const [updateBusy, setUpdateBusy] = useState<'check' | 'update' | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateNotice, setUpdateNotice] = useState<string | null>(null);
+  const [confirmUpdate, setConfirmUpdate] = useState(false);
   // 绑定相位变化时重拉配置（扫码落库的白名单等新值）
   const bindPhase = props?.bindPhase;
 
@@ -813,6 +844,23 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       });
     return () => { stopped = true; };
   }, [bindPhase]);
+
+  // 更新页签首次打开时读取安装信息（未打开不请求，避免多一次路由往返）
+  useEffect(() => {
+    if (activeTab !== 'update' || updateInfo !== null) return;
+    let stopped = false;
+    void fetch(BIND_UPDATE_PATH, { cache: 'no-store' })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as UpdateStateWire;
+        if (stopped) return;
+        if (body.install !== undefined) setUpdateInfo(body.install);
+        else setUpdateError(body.error ?? `读取安装信息失败（HTTP ${res.status}）`);
+      })
+      .catch((err: unknown) => {
+        if (!stopped) setUpdateError(err instanceof Error ? err.message : String(err));
+      });
+    return () => { stopped = true; };
+  }, [activeTab, updateInfo]);
 
   const patch = useCallback(<K extends keyof ConfigWire>(key: K, value: ConfigWire[K]): void => {
     setForm((current) => current === null ? current : { ...current, [key]: value });
@@ -934,6 +982,38 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       })
       .finally(() => { setBusy(false); });
   }, [busy, form, initial]);
+
+  // 更新页签动作：check = 对比远端；update = 执行 pnpm update 并等待重载
+  const runUpdateAction = useCallback((action: 'check' | 'update'): void => {
+    setUpdateBusy(action);
+    setUpdateError(null);
+    setUpdateNotice(null);
+    void fetch(BIND_UPDATE_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action }),
+    })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as UpdateStateWire;
+        if (body.install !== undefined) setUpdateInfo(body.install);
+        if (body.check !== undefined) setUpdateCheck(body.check);
+        if (body.ok === true) {
+          // 检查成功的结论已经在「版本检查」区展示，这里只处理更新成功的提示；
+          // 更新成功后清掉旧的检查结果，避免仍显示「发现新版本」
+          if (action === 'update') {
+            setUpdateNotice(body.message ?? '更新完成');
+            setConfirmUpdate(false);
+            setUpdateCheck(null);
+          }
+          return;
+        }
+        setUpdateError(body.error ?? `操作失败（HTTP ${res.status}）`);
+      })
+      .catch((err: unknown) => {
+        setUpdateError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { setUpdateBusy(null); });
+  }, []);
 
   if (loadError !== null) {
     return createElement('p', { className: 'imqb2-hint', style: { padding: '12px 0' } },
@@ -1315,6 +1395,93 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
       : null,
   ];
 
+  const updatePanel: ReactNode[] = [
+    createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 8px' } },
+      '检查当前安装方式下远端是否有新版本。git 安装会对比远端最新 commit；'
+      + '更新后会重新解析依赖并自动重载插件，不需要卸载重装。'),
+    updateError !== null
+      ? createElement('p', { className: 'imqb2-hint-warn' }, updateError)
+      : null,
+    createElement('div', { className: 'imqb2-field' },
+      createElement('span', { className: 'imqb2-label' }, '当前安装'),
+      updateInfo === null
+        ? createElement('p', { className: 'imqb2-hint' }, '正在读取安装信息…')
+        : createElement('div', null,
+            createElement('p', { className: 'imqb2-readonly' },
+              `${updateInfo.version} · ${updateKindLabel(updateInfo.kind)}`),
+            updateInfo.installed !== ''
+              ? createElement('p', { className: 'imqb2-hint' },
+                  `已安装引用：${updateInfo.kind === 'git'
+                    ? shortHash(updateInfo.installed)
+                    : updateInfo.installed}`)
+              : null,
+            updateInfo.spec !== undefined
+              ? createElement('p', { className: 'imqb2-hint' }, `依赖写法：${updateInfo.spec}`)
+              : null,
+            updateInfo.message !== undefined
+              ? createElement('p', { className: 'imqb2-hint-warn' }, updateInfo.message)
+              : null,
+          ),
+    ),
+    createElement('div', { className: 'imqb2-field' },
+      createElement('span', { className: 'imqb2-label' }, '版本检查'),
+      updateCheck === null
+        ? createElement('p', { className: 'imqb2-hint' },
+            '点击「检查更新」对比远端最新版本；git 安装对比远端 commit，npm 安装对比 registry。')
+        : createElement('div', null,
+            createElement('p', {
+              className: updateCheck.updateAvailable ? 'imqb2-hint-warn' : 'imqb2-hint',
+            }, updateCheck.message),
+            createElement('p', { className: 'imqb2-hint' },
+              `检查时间：${new Date(updateCheck.checkedAt).toLocaleTimeString()}`),
+          ),
+      createElement('div', {
+        style: { display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' },
+      },
+        createElement('button', {
+          type: 'button', className: 'imqb2-save',
+          disabled: updateBusy !== null || updateInfo === null,
+          onClick: () => { runUpdateAction('check'); },
+        }, updateBusy === 'check' ? '正在检查…' : '检查更新'),
+        updateCheck?.updateAvailable === true && updateInfo !== null
+          ? confirmUpdate
+            ? [
+                createElement('button', {
+                  key: 'confirm',
+                  type: 'button', className: 'imqb2-save',
+                  disabled: updateBusy !== null,
+                  onClick: () => { runUpdateAction('update'); },
+                }, updateBusy === 'update' ? '正在更新…' : '确认更新'),
+                createElement('button', {
+                  key: 'cancel',
+                  type: 'button', className: 'imqb2-tab',
+                  disabled: updateBusy !== null,
+                  onClick: () => { setConfirmUpdate(false); },
+                }, '取消'),
+              ]
+            : createElement('button', {
+                key: 'start',
+                type: 'button', className: 'imqb2-save',
+                disabled: updateBusy !== null || !updateInfo.canUpdate,
+                title: updateInfo.canUpdate
+                  ? '执行 pnpm update，完成后自动重载插件'
+                  : `当前宿主不支持一键更新，请手动执行：${updateInfo.command}`,
+                onClick: () => { setConfirmUpdate(true); },
+              }, '立即更新')
+          : null,
+      ),
+      updateInfo !== null && !updateInfo.canUpdate && updateCheck?.updateAvailable === true
+        ? createElement('p', { className: 'imqb2-hint' },
+            `当前宿主不支持一键更新，请手动执行：${updateInfo.command}`)
+        : null,
+      updateNotice !== null
+        ? createElement('p', { className: 'imqb2-note imqb2-note--ok' }, updateNotice)
+        : null,
+      createElement('p', { className: 'imqb2-hint' },
+        '更新完成后插件会自动重载；若界面没有刷新，请重启 DSH。'),
+    ),
+  ];
+
   const panels: Record<TabId, ReactNode[]> = {
     access: accessPanel,
     identity: identityPanel,
@@ -1323,6 +1490,7 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     voice: voicePanel,
     model: modelPanel,
     personas: personasPanel,
+    update: updatePanel,
   };
   const activeTabLabel = TABS.find((tab) => tab.id === activeTab)?.label ?? '';
 

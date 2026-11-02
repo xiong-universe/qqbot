@@ -89,6 +89,19 @@ export QQBOT_APPID="yourAppID" QQBOT_SECRET="yourAppSecret"
 npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 ```
 
+## Checking for updates
+
+Upgrading no longer means uninstalling and reinstalling: the settings panel has a new "Plugin update" tab (avatar → Settings → "QQ Bot" → "Plugin update").
+
+- **Check**: the plugin reads the dependency spec from the profile and the installed reference from `pnpm-lock.yaml`, then compares against the remote — git installs compare the remote HEAD commit (`git ls-remote`), npm installs compare the registry `latest` version.
+- **One-click update**: on Desktop the host's `desktopPnpm` runs `dsh plugin --profile <name> update @tencent-connect/dsh-qqbot` (that is `pnpm update`, which re-resolves the git remote commit and rewrites the lockfile), then triggers an HMR reload so the new version takes effect immediately.
+- **Manual update** (CLI or when the host exposes no pnpm service):
+  ```bash
+  npx @deepseek-ai/dsh plugin --profile qqbot update @tencent-connect/dsh-qqbot
+  ```
+- **Install kinds that cannot self-update**: `file:` / `link:` local installs and `--patch` source loading show "update the source and restart"; a dependency pinned to an exact commit (`#<sha>`) does not follow the remote until the ref is changed back to a branch name.
+- The update relies on `pnpm update` succeeding. If the new version is incompatible with the current DSH runtime, the host restores `package.json` / `pnpm-lock.yaml` and the tab shows the reason (you can follow its hint to run `dsh plugin --profile <name> allow-version ...` and retry).
+
 ## Configuration
 
 | Config | Type | Default | Description |

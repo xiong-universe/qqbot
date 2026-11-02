@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### ✨ Added
 
+- **Update detection and one-click upgrade**: the settings panel has a new "Plugin update" tab that detects the install kind (git / npm / local path) and reads the installed reference from the profile. Git installs compare the remote HEAD commit (`git ls-remote`) and npm installs compare the registry `latest`; when a newer version exists, "Update now" runs `dsh plugin --profile <name> update @tencent-connect/dsh-qqbot` on Desktop through the host `desktopPnpm` service (that is `pnpm update`, re-resolving the git remote commit) and triggers an HMR reload afterwards — **no uninstall/reinstall needed**. On CLI or when the host exposes no pnpm service the tab prints a copyable command; `file:` / `link:` local installs, `--patch` source loading and commit-pinned dependencies are reported as not self-updatable with the reason.
 - **Voice master switch (`voice.enabled`, default `true`)**: voice now requires both the switch to be on and an API key to be present. Pause voice by turning off the "Enable voice replies" switch at the top of the settings tab — the key is kept, so clearing the key is no longer needed to disable voice; turning the switch back on restores it immediately. Configs without `enabled` are treated as on, so existing users with a key see no behaviour change after upgrading.
 
 ### 🔧 Changed

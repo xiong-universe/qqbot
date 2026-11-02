@@ -17,11 +17,13 @@ import {
   BIND_REFRESH_PATH,
   BIND_STATE_PATH,
   BIND_UNBIND_PATH,
+  BIND_UPDATE_PATH,
   registerBindRoutes,
   type BindRoutesOptions,
   type WebRoute,
 } from './bind-routes.ts';
 import type { BindingService } from './binding-service.ts';
+import type { InstallationInfo } from '../update/update-service.ts';
 
 /** 默认 unbind/persist 实现依赖 getProfileDir：用可控 mock 替换（其余导出保留） */
 const profileDirState = vi.hoisted(() => ({ dir: undefined as string | undefined }));
@@ -913,5 +915,138 @@ describe('bind-routes', () => {
     const resNone = fakeRes();
     await invoke(routes.get(BIND_STATE_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), resNone);
     expect(resNone.statusCode).toBe(200);
+  });
+
+  describe('插件更新路由', () => {
+    const install: InstallationInfo = {
+      packageName: '@tencent-connect/dsh-qqbot',
+      kind: 'git',
+      version: '0.11.0',
+      installed: '889ef5232dfe48d8e2954d41be0866d749229c3e',
+      spec: 'https://gitee.com/x/qq-bot.git',
+      remote: 'https://gitee.com/x/qq-bot.git',
+      canUpdate: true,
+      command: 'dsh plugin --profile desktop update @tencent-connect/dsh-qqbot',
+      profileDir: '/profile/desktop',
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('GET 回显安装信息（不回传 profileDir）', async () => {
+      const { routes } = createHarness({ update: { inspect: () => install } });
+      const res = fakeRes();
+      await invoke(routes.get(BIND_UPDATE_PATH), fakeReq('GET', { host: '127.0.0.1:3080' }), res);
+      expect(res.statusCode).toBe(200);
+      const body = json(res) as { ok: boolean; install: Record<string, unknown> };
+      expect(body.ok).toBe(true);
+      expect(body.install).toMatchObject({ kind: 'git', canUpdate: true });
+      expect(body.install).not.toHaveProperty('profileDir');
+    });
+
+    it('POST check 返回远端结果', async () => {
+      const check = vi.fn(async () => ({
+        updateAvailable: true,
+        latest: 'abcdef0123456789abcdef0123456789abcdef01',
+        checkedAt: 123,
+        message: '发现新版本',
+      }));
+      const { routes } = createHarness({ update: { inspect: () => install, check } });
+      const res = fakeRes();
+      await invoke(
+        routes.get(BIND_UPDATE_PATH),
+        fakeReq('POST', { host: '127.0.0.1:3080' }, '{"action":"check"}'),
+        res,
+      );
+      expect(res.statusCode).toBe(200);
+      expect(check).toHaveBeenCalledWith(install);
+      expect(json(res)).toMatchObject({
+        ok: true,
+        check: { updateAvailable: true, latest: 'abcdef0123456789abcdef0123456789abcdef01' },
+      });
+    });
+
+    it('检查失败：200 + 错误信息（保留安装信息）', async () => {
+      const { routes } = createHarness({
+        update: {
+          inspect: () => install,
+          check: async () => { throw new Error('git ls-remote 超时'); },
+        },
+      });
+      const res = fakeRes();
+      await invoke(
+        routes.get(BIND_UPDATE_PATH),
+        fakeReq('POST', { host: '127.0.0.1:3080' }, '{"action":"check"}'),
+        res,
+      );
+      expect(res.statusCode).toBe(200);
+      expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('git ls-remote 超时') });
+    });
+
+    it('POST update 成功：返回新安装信息并在响应后触发重载', async () => {
+      vi.useFakeTimers();
+      const next = { ...install, installed: 'abcdef0123456789abcdef0123456789abcdef01' };
+      const perform = vi.fn(async () => ({ ok: true, exitCode: 0, message: '更新完成' }));
+      const reload = vi.fn();
+      const { routes } = createHarness({
+        update: { inspect: () => next, perform, reload },
+      });
+      const res = fakeRes();
+      await invoke(
+        routes.get(BIND_UPDATE_PATH),
+        fakeReq('POST', { host: '127.0.0.1:3080' }, '{"action":"update"}'),
+        res,
+      );
+      expect(res.statusCode).toBe(200);
+      expect(perform).toHaveBeenCalledTimes(1);
+      expect(json(res)).toMatchObject({
+        ok: true,
+        install: { installed: 'abcdef0123456789abcdef0123456789abcdef01' },
+      });
+      expect(reload).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('更新失败：500 + 命令输出摘要', async () => {
+      const { routes } = createHarness({
+        update: {
+          inspect: () => install,
+          perform: async () => ({ ok: false, exitCode: 1, message: '更新命令失败：fatal: unable to access' }),
+        },
+      });
+      const res = fakeRes();
+      await invoke(
+        routes.get(BIND_UPDATE_PATH),
+        fakeReq('POST', { host: '127.0.0.1:3080' }, '{"action":"update"}'),
+        res,
+      );
+      expect(res.statusCode).toBe(500);
+      expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('unable to access') });
+    });
+
+    it('action 非法 / 方法不支持 / 跨站 Origin 均拒绝', async () => {
+      const { routes } = createHarness({ update: { inspect: () => install } });
+      const bad = fakeRes();
+      await invoke(
+        routes.get(BIND_UPDATE_PATH),
+        fakeReq('POST', { host: '127.0.0.1:3080' }, '{"action":"install"}'),
+        bad,
+      );
+      expect(bad.statusCode).toBe(400);
+
+      const wrongMethod = fakeRes();
+      await invoke(routes.get(BIND_UPDATE_PATH), fakeReq('DELETE', { host: '127.0.0.1:3080' }), wrongMethod);
+      expect(wrongMethod.statusCode).toBe(405);
+
+      const crossSite = fakeRes();
+      await invoke(
+        routes.get(BIND_UPDATE_PATH),
+        fakeReq('GET', { host: '127.0.0.1:3080', origin: 'https://evil.example.com' }),
+        crossSite,
+      );
+      expect(crossSite.statusCode).toBe(403);
+    });
   });
 });

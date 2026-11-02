@@ -10,6 +10,7 @@
 
 ### ✨ 新功能
 
+- **插件检测升级与一键更新**：设置面板新增「插件更新」页签，自动识别当前安装方式（git / npm / 本地路径）并读取 profile 里已装的引用。git 安装对比远端最新 commit（`git ls-remote`），npm 安装对比 registry 的 `latest`；发现新版本时可直接点「立即更新」，桌面版通过宿主 `desktopPnpm` 执行 `dsh plugin --profile <name> update @tencent-connect/dsh-qqbot`（即 `pnpm update`，会重新解析 git 远端 commit），完成后自动 HMR 重载，**不需要再卸载重装**。CLI 或宿主没有 pnpm 服务时页签会给出可直接复制的命令；`file:` / `link:` 本地路径安装、`--patch` 源码直载与固定 commit 的依赖会明确提示不支持自更新及原因。
 - **语音总开关（`voice.enabled`，默认 `true`）**：语音现在需要「开关打开 + 已填写 API Key」两个条件才生效。要暂停语音直接关闭设置面板顶部的「启用语音回复」开关即可，Key 会保留，不用再靠清除 Key 来停用；重新打开立即恢复。旧配置未写 `enabled` 时按开启处理，已有 Key 的用户升级后行为不变。
 
 ### 🔧 变更
