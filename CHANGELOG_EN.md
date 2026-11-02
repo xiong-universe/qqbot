@@ -6,6 +6,16 @@ This file records significant dsh-qqbot updates from a product perspective, focu
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### ✨ Added
+
+- **Voice master switch (`voice.enabled`, default `true`)**: voice now requires both the switch to be on and an API key to be present. Pause voice by turning off the "Enable voice replies" switch at the top of the settings tab — the key is kept, so clearing the key is no longer needed to disable voice; turning the switch back on restores it immediately. Configs without `enabled` are treated as on, so existing users with a key see no behaviour change after upgrading.
+
+### 🔧 Changed
+
+- "Clear saved key" is now purely key management; voice is started/stopped by the switch. While the switch is off no `qqbot_voice` tool is registered, nothing is synthesized, no voice is sent and no quota is consumed.
+
 ## [0.11.0] - 2026-10-31
 
 ### ✨ Added

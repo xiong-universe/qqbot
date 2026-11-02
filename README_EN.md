@@ -103,7 +103,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `globalPrompt` | string | `''` | Global system prompt applied to all group/direct chats (put split rules here) |
 | `personas` | array | `[]` | Persona presets (switchable via `/persona` in QQ, each with an optional `tools` whitelist) |
 | `defaultPersona` | string | `''` | Default persona id; empty disables personas |
-| `voice` | object | see below | Outbound voice (TTS): **leaving `apiKey` empty disables voice replies**, see below |
+| `voice` | object | see below | Outbound voice (TTS): **voice is disabled when `enabled` is off or `apiKey` is empty**, see below |
 | `textChunkLimit` | number | `4500` | Max chars per message |
 | `streaming` | boolean | `true` | Enable streaming output (always disabled in groups) |
 | `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | Reply split mode: `delimiter` splits at the fixed `|||` delimiter (recommended; once a delimiter appears, leftover newlines in a segment also split); splitting disables streaming |
@@ -149,7 +149,7 @@ Split the single prompt into several switchable personas, each with its own tool
   - `maxPerReply`: max kaomoji per reply (1–3, default 1).
   - `custom`: extra kaomoji (up to 20 entries, ≤32 chars each), appended after the preset list.
   - The library lives in `src/expressions/kaomoji.ts`; future sticker (image) support will add a `sticker` field to the same `expressions` container without changing the persona shape.
-- `expressions.voice`: **the persona's voice timbre** (optional). `voice` overrides the global timbre, `rate` (0.5–2) / `volume` (0–100) are optional, and `instruction` overrides the global emotion/tone instruction (empty inherits the global value). Voice replies themselves are gated by the global `voice.apiKey`; nothing here takes effect while it is empty. Example: `expressions: { voice: { voice: longanfengyue, rate: 1.1, instruction: 请用清冷克制的语气 } }`.
+- `expressions.voice`: **the persona's voice timbre** (optional). `voice` overrides the global timbre, `rate` (0.5–2) / `volume` (0–100) are optional, and `instruction` overrides the global emotion/tone instruction (empty inherits the global value). Voice replies themselves are gated by the global `voice.enabled` switch and `voice.apiKey`; nothing here takes effect unless both are set. Example: `expressions: { voice: { voice: longanfengyue, rate: 1.1, instruction: 请用清冷克制的语气 } }`.
 - `tools` is a **hard** runtime constraint: the persona's agent calls `tools.restrict({ allow })`, so tools outside the whitelist are not even visible to the model (not just discouraged by the prompt).
   - Omit `tools` to use the **default allowlist**: the 7 plugin tools (`qqbot_solve`, `qqbot_describe_image`, `qqbot_send_file`, `qqbot_translate`, `qqbot_summarize`, `qqbot_explain`, `qqbot_rewrite`) plus `ask_user_question` and read-only `web_search` / `web_fetch`.
   - `tools: []` disables all tools for that persona.
@@ -162,13 +162,14 @@ Split the single prompt into several switchable personas, each with its own tool
 
 ### Voice replies (voice)
 
-Speak replies instead of typing them: built on DashScope real-time speech synthesis (WebSocket). **Whether to use voice is decided by the model** — when voice fits, it calls the `qqbot_voice` tool and the reply body of that turn is synthesized into a QQ voice message and is **no longer sent as duplicate text**; if synthesis fails or the content is unsuitable for speech, the plugin falls back to the text reply. **Voice is fully disabled while `voice.apiKey` is empty** — no tool registration, no synthesis, no voice message, no quota consumed.
+Speak replies instead of typing them: built on DashScope real-time speech synthesis (WebSocket). **Whether to use voice is decided by the model** — when voice fits, it calls the `qqbot_voice` tool and the reply body of that turn is synthesized into a QQ voice message and is **no longer sent as duplicate text**; if synthesis fails or the content is unsuitable for speech, the plugin falls back to the text reply. Voice is fully disabled when the `voice.enabled` master switch is off **or** `voice.apiKey` is empty — no tool registration, no synthesis, no voice message, no quota consumed. Turn the switch off to pause voice and keep the key.
 
 ```yaml
 - id: im-qqbot
   config:
     voice:
-      apiKey: ''                        # empty = voice disabled; fill in a Bailian API key to enable
+      enabled: true                     # master switch; even with a key, voice stays off when false
+      apiKey: ''                        # empty = cannot enable voice; fill in a Bailian API key to enable
       model: qwen-audio-3.0-tts-flash   # TTS model (cosyvoice-v2 and others also work)
       voice: longanfengyue              # default timbre
       instruction: 场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑，语速偏慢；第2句：吞吐、句尾落地   # emotion/tone instruction (natural language, optional)
@@ -183,7 +184,8 @@ Speak replies instead of typing them: built on DashScope real-time speech synthe
 
 | Config | Type | Default | Description |
 |------|------|--------|------|
-| `voice.apiKey` | string | `''` | DashScope API key; **empty = voice disabled** (in the settings panel, leaving it empty keeps the saved key — use "Clear saved key" to actually disable) |
+| `voice.enabled` | boolean | `true` | Master switch; when off no tool is registered, nothing is synthesized and no voice is sent even with a saved API key (default on for backward compatibility) |
+| `voice.apiKey` | string | `''` | DashScope API key; **empty = voice cannot be enabled** (in the settings panel, leaving it empty keeps the saved key; use the `enabled` switch to pause voice, no need to clear the key) |
 | `voice.model` | string | `qwen-audio-3.0-tts-flash` | TTS model id; the model must be activated in the Bailian console |
 | `voice.voice` | string | `longanfengyue` | Default timbre id; personas can override it via `expressions.voice.voice` |
 | `voice.instruction` | string | `''` | Emotion/tone instruction (natural language, ≤400 chars): can be written as "scene + per-sentence delivery" (see below); personas can override it via `expressions.voice.instruction` |
@@ -198,7 +200,7 @@ Speak replies instead of typing them: built on DashScope real-time speech synthe
 - **Per-persona timbre**: `personas[].expressions.voice` overrides the global timbre, rate, volume and emotion instruction; the change applies to the next voice message after switching personas. The model may also write a one-off "scene + per-sentence delivery" instruction for the current turn (e.g. `场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑…`), lasting only that turn. The voice prompt asks it to **write the scene and the delivery of each sentence on every call** so replies do not all share the same default delivery.
 - **Automatic cleanup**: code blocks, URLs, Markdown symbols, the `|||` delimiter and kaomoji are not read aloud; `|||` and line breaks both become sentence boundaries and a terminal mark is added, so the reading has natural pauses and a proper ending.
 - **Runtime requirement**: uses the built-in WebSocket in Node 22+; on Node 20 voice is disabled at startup with a warning even if a key is filled in.
-- The "Voice replies" tab in the settings panel edits these fields; a saved API key is **never echoed back**, only a "saved" state is shown.
+- The "Voice replies" tab in the settings panel edits these fields; the "Enable voice replies" switch at the top pauses/resumes voice at any time while keeping the key, and a saved API key is **never echoed back**, only a "saved" state is shown.
 
 #### Built-in timbre presets (model compatibility is labelled)
 

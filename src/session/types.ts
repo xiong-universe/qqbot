@@ -133,7 +133,7 @@ export interface SessionRecord {
    * 本轮是否由模型选择了语音回复（模型调用 `qqbot_voice` 后置 true）。
    *
    * 每条入站消息都会复位：语音只在模型明确要求的那一轮生效，不会顺着会话延续。
-   * 语音功能未配置（`voice.apiKey` 为空）时工具不注册，该标记恒为 undefined。
+   * 语音功能未启用（开关关闭或 `voice.apiKey` 为空）时工具不注册，该标记恒为 undefined。
    */
   voiceRequested?: boolean;
   /**

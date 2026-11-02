@@ -92,6 +92,7 @@ describe('buildVoiceToolMessage', () => {
     expect(text).toContain('400');
     expect(text).toContain('像念稿');
     expect(text).not.toContain('本轮语气');
+    expect(text).toContain('本轮没有收到 instruction');
   });
 
   it('有单轮情感指令时附在最后', () => {
@@ -125,12 +126,13 @@ describe('registerVoiceTool', () => {
     return { ok, registered, manager, target, tools };
   }
 
-  it('注册成功：工具名与参数只保留可选的单轮语气', () => {
+  it('注册成功：工具名与参数只保留必填的单轮语气', () => {
     const { ok, registered } = harness();
     expect(ok).toBe(true);
     expect(registered[0]?.name).toBe(VOICE_TOOL_NAME);
-    const props = (registered[0]?.parameters as { properties: Record<string, unknown> }).properties;
-    expect(Object.keys(props)).toEqual(['instruction']);
+    const params = registered[0]?.parameters as { properties: Record<string, unknown>; required?: string[] };
+    expect(Object.keys(params.properties)).toEqual(['instruction']);
+    expect(params.required).toEqual(['instruction']);
   });
 
   it('tools 服务缺失时优雅降级（不抛错）', () => {

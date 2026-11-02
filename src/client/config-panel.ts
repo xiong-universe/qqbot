@@ -70,10 +70,12 @@ interface VoicePresetEntryWire {
 
 /** 全局语音回复配置（apiKey 永不回显，只回 hasApiKey） */
 interface VoiceWire {
+  /** 语音总开关（关闭后即使有 Key 也不启用） */
+  enabled?: boolean;
   apiKey?: string;
   /** GET 回显的只读提示；提交时忽略 */
   hasApiKey?: boolean;
-  /** 提交时显式清空已保存的 Key（= 关闭语音） */
+  /** 提交时显式清空已保存的 Key（Key 管理，不再等价于停用语音） */
   clearApiKey?: boolean;
   model?: string;
   voice?: string;
@@ -1145,23 +1147,34 @@ export function ConfigPanel(props?: { bindPhase?: string }): ReactNode {
     }),
   ];
 
+  const voiceEnabled = voice.enabled !== false;
   const voicePanel: ReactNode[] = [
+    createElement(SwitchRow, {
+      label: '启用语音回复',
+      checked: voiceEnabled,
+      help: '关闭后即使已保存 API Key 也不会注册 qqbot_voice 工具、不合成、不发语音；'
+        + '重新打开即可恢复，不需要清除 Key。',
+      onChange: (v) => { patch('voice', { ...voice, enabled: v }); },
+    }),
     createElement('p', { className: 'imqb2-hint', style: { padding: '4px 0 8px' } },
-      voice.hasApiKey === true
-        ? '语音功能已启用：由模型判断这一轮要不要发语音。需要语音时会调用 qqbot_voice，'
-          + '本轮回复只发语音、不再重复发文字；合成失败或内容不适合朗读时退回文字。'
-        : '语音功能未启用：填写 API Key 并保存后生效。留空即完全关闭（不注册语音工具、不合成、不发语音、不消耗额度）。'),
+      voiceEnabled
+        ? voice.hasApiKey === true
+          ? '语音功能已启用：由模型判断这一轮要不要发语音。需要语音时会调用 qqbot_voice，'
+            + '本轮回复只发语音、不再重复发文字；合成失败或内容不适合朗读时退回文字。'
+          : '语音开关已打开，但还没有填写 API Key：填写并保存后才会真正生效。'
+        : '语音已关闭：即使已保存 API Key 也不会注册语音工具、不合成、不发语音，也不消耗额度；'
+          + '打开上方开关即可恢复。'),
     createElement(FieldRow, {
       label: 'DashScope API Key', type: 'password',
       value: voice.apiKey ?? '',
       placeholder: voice.hasApiKey === true ? '已保存（输入新 Key 可替换）' : '留空则不启用语音',
-      help: '已保存的 Key 不会回显；留空提交表示保持现有 Key，「清除已保存的 Key」才会真正关闭语音。',
+      help: '已保存的 Key 不会回显；留空提交表示保持现有 Key。要停用语音请用上方开关，不需要清除 Key。',
       onChange: (v) => { patch('voice', { ...voice, apiKey: v }); },
     }),
     voice.hasApiKey === true && (voice.apiKey ?? '').trim() === ''
       ? createElement('div', { className: 'imqb2-field', style: { padding: '0 0 8px', borderTop: 0 } },
           createElement('div', { className: 'imqb2-head' },
-            createElement('span', { className: 'imqb2-hint' }, '已保存 API Key，语音功能处于启用状态。'),
+            createElement('span', { className: 'imqb2-hint' }, '已保存 API Key；语音是否生效由上方开关决定。'),
             createElement('button', {
               type: 'button', className: 'imqb2-persona-add',
               onClick: () => { patch('voice', { ...voice, apiKey: '', clearApiKey: true, hasApiKey: false }); },

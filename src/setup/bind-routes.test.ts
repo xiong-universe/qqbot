@@ -618,6 +618,7 @@ describe('bind-routes', () => {
       currentConfig: () => ({
         requireMention: true,
         voice: {
+          enabled: false,
           apiKey: 'sk-secret', model: 'cosyvoice-v2', voice: 'longxiaochun_v2',
           baseUrl: '', workspace: '', maxChars: 300, timeoutMs: 30000,
         },
@@ -630,6 +631,7 @@ describe('bind-routes', () => {
       config: {
         requireMention: true,
         voice: {
+          enabled: false,
           apiKey: '', hasApiKey: true, model: 'cosyvoice-v2', voice: 'longxiaochun_v2',
           baseUrl: '', workspace: '', maxChars: 300, timeoutMs: 30000,
         },
@@ -663,7 +665,7 @@ describe('bind-routes', () => {
     });
   });
 
-  it('POST config：clearApiKey 显式清空 Key（= 关闭语音）', async () => {
+  it('POST config：clearApiKey 显式清空 Key（Key 管理，不再等价于停用语音）', async () => {
     let saved: Record<string, unknown> | undefined;
     const { routes } = createHarness({
       currentConfig: () => ({ voice: { apiKey: 'sk-old' } }),
@@ -677,6 +679,34 @@ describe('bind-routes', () => {
     );
     expect(res.statusCode).toBe(200);
     expect((saved?.voice as { apiKey?: string }).apiKey).toBe('');
+  });
+
+  it('POST config：开关可关闭语音且保留已保存的 Key', async () => {
+    let saved: Record<string, unknown> | undefined;
+    const { routes } = createHarness({
+      currentConfig: () => ({ voice: { enabled: true, apiKey: 'sk-old' } }),
+      onUpdateConfig: (config) => { saved = config; return true; },
+    });
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, '{"voice":{"enabled":false}}'),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(saved).toMatchObject({ voice: { enabled: false, apiKey: 'sk-old' } });
+  });
+
+  it('POST config：voice.enabled 必须是布尔值', async () => {
+    const { routes } = createHarness();
+    const res = fakeRes();
+    await invoke(
+      routes.get(BIND_CONFIG_PATH),
+      fakeReq('POST', { host: '127.0.0.1:3080' }, '{"voice":{"enabled":"off"}}'),
+      res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: expect.stringContaining('布尔') });
   });
 
   it('POST config：语音 baseUrl 必须是 ws/wss 地址', async () => {

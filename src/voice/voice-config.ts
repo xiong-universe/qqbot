@@ -1,8 +1,9 @@
 /**
  * 语音回复的配置解析与文本清洗
  *
- * 门控语义：`voice.apiKey` 为空 = 语音功能整体关闭（不注册 qqbot_voice 工具、
- * 不合成、不发语音、不消耗额度），与没有这项配置时的行为完全一致。
+ * 门控语义：`voice.enabled` 为 false **或** `voice.apiKey` 为空 = 语音功能整体关闭
+ * （不注册 qqbot_voice 工具、不合成、不发语音、不消耗额度），与没有这项配置时的
+ * 行为完全一致。两个条件必须同时满足才启用。
  *
  * 是否发语音由**上层模型**判断（调用 qqbot_voice 工具），不再做字符匹配：
  * 关键词命中会把「唱歌」这类闲聊误判成指令，也挡不住「想听你的声音」这类变体。
@@ -110,11 +111,15 @@ export function buildSpeechInstruction(base?: string): string {
 }
 
 /**
- * 解析语音配置；`apiKey` 为空时返回 undefined（= 语音关闭）。
+ * 解析语音配置；开关关闭或 `apiKey` 为空时返回 undefined（= 语音关闭）。
+ *
+ * 开关缺省视为打开（兼容未写 `enabled` 的旧配置）；已有 Key 的旧配置升级后
+ * 行为不变，想停用语音时关开关即可，不需要清除 Key。
  *
  * 模型/音色为空时回落到缺省值，避免面板里清空后合成直接失败。
  */
 export function resolveVoiceSettings(voice: VoiceConfig | undefined): ResolvedVoiceSettings | undefined {
+  if (voice?.enabled === false) return undefined;
   const apiKey = voice?.apiKey?.trim() ?? '';
   if (apiKey === '') return undefined;
 
@@ -137,7 +142,7 @@ export function resolveVoiceSettings(voice: VoiceConfig | undefined): ResolvedVo
 }
 
 /**
- * 语音是否真正可用：apiKey 非空**且**运行时支持内置 WebSocket（Node 22+）。
+ * 语音是否真正可用：开关打开**且** apiKey 非空**且**运行时支持内置 WebSocket（Node 22+）。
  *
  * 提示词注入与工具白名单都按它判断：Node 20 填了 Key 也合成不了，
  * 此时不能再告诉模型「你可以调 qqbot_voice」，否则模型只会调到一个不存在的工具。

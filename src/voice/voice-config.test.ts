@@ -11,6 +11,7 @@ import { MAX_VOICE_INSTRUCTION_LEN, type VoiceConfig } from '../config.ts';
 
 function voiceConfig(overrides: Partial<VoiceConfig> = {}): VoiceConfig {
   return {
+    enabled: true,
     apiKey: 'sk-test',
     model: 'qwen-audio-3.0-tts-flash',
     voice: 'longanfengyue',
@@ -24,7 +25,16 @@ function voiceConfig(overrides: Partial<VoiceConfig> = {}): VoiceConfig {
   };
 }
 
-describe('resolveVoiceSettings（apiKey 门控）', () => {
+describe('resolveVoiceSettings（开关 + apiKey 门控）', () => {
+  it('开关关闭时即使 apiKey 非空也返回 undefined', () => {
+    expect(resolveVoiceSettings(voiceConfig({ enabled: false }))).toBeUndefined();
+  });
+
+  it('缺省 enabled（旧配置）视为开关打开：有 Key 时仍启用', () => {
+    expect(resolveVoiceSettings(voiceConfig({ enabled: undefined as unknown as boolean })))
+      .toMatchObject({ apiKey: 'sk-test' });
+  });
+
   it('apiKey 为空（含纯空白）时返回 undefined：语音功能关闭', () => {
     expect(resolveVoiceSettings(undefined)).toBeUndefined();
     expect(resolveVoiceSettings(voiceConfig({ apiKey: '' }))).toBeUndefined();

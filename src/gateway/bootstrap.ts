@@ -120,13 +120,13 @@ export async function bootstrapGateway(
   const deliverablesDeliverer = new DeliverablesDeliverer(sender, mediaSender, config, logger);
 
   // ── 语音回复（TTS）──
-  // 门控完全由配置决定：voice.apiKey 为空 = 不创建 speaker、不注册工具、不发语音。
+  // 门控完全由配置决定：开关关闭或 voice.apiKey 为空 = 不创建 speaker、不注册工具、不发语音。
   // 是否真的要发语音由上层模型判断（调用 qqbot_voice），不再做字符匹配。
   // 运行时缺少内置 WebSocket（Node 20）时同样关闭，并给出一次启动告警。
   const voiceSpeaker = createVoiceSpeaker({ manager, voice: config.voice, sender: mediaSender, logger });
   const voiceSettings = resolveActiveVoiceSettings(config.voice);
   if (voiceSpeaker === undefined || voiceSettings === undefined) {
-    logger.info('im-qqbot: 语音回复未启用（voice.apiKey 为空或运行时缺少 WebSocket）');
+    logger.info('im-qqbot: 语音回复未启用（开关关闭、voice.apiKey 为空或运行时缺少 WebSocket）');
   } else {
     const voiceOptions = buildVoiceOptions(config.voice?.presets, config.voice?.model);
     registerVoiceTool(ctx, { manager, settings: voiceSettings, voiceOptions, logger });

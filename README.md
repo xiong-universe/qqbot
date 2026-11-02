@@ -116,7 +116,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 | `globalPrompt` | string | `''` | 全局 system prompt：对所有群聊/私聊生效（多条消息拆分规则建议写在这里） |
 | `personas` | array | `[]` | 人格预设列表（QQ 端 `/persona` 切换，可配置 `tools` 工具白名单），见下文 |
 | `defaultPersona` | string | `''` | 默认人格 id，留空表示不启用人格 |
-| `voice` | object | 见下文 | 出站语音（TTS）：**`apiKey` 留空即关闭语音功能**，见下文 |
+| `voice` | object | 见下文 | 出站语音（TTS）：**`enabled` 关闭或 `apiKey` 留空即关闭语音功能**，见下文 |
 | `textChunkLimit` | number | `4500` | 单条消息最大字符数 |
 | `streaming` | boolean | `true` | 是否启用流式输出（群聊始终不启用） |
 | `replySplitMode` | `none`/`delimiter`/`line`/`paragraph` | `none` | 回复拆分方式：`delimiter` 按固定分隔符 `|||` 拆（推荐；只要出现分隔符，段内剩余换行也按分条处理），`none` 只按长度切分，`line` 每个换行发一条，`paragraph` 按空行分段。开启后自动关闭流式输出 |
@@ -197,13 +197,14 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 ### 语音回复（voice）
 
-把回复「说给用户听」：基于 DashScope 实时语音合成（WebSocket）。**是否需要发语音由上层模型判断**——模型需要时会调用 `qqbot_voice` 工具，本轮回复正文直接合成为 QQ 语音，**不再重复发一条相同的文字**；合成失败或内容不适合朗读时自动退回文字。**`voice.apiKey` 为空时语音功能完全关闭**——不注册工具、不合成、不发语音，也不消耗任何额度。
+把回复「说给用户听」：基于 DashScope 实时语音合成（WebSocket）。**是否需要发语音由上层模型判断**——模型需要时会调用 `qqbot_voice` 工具，本轮回复正文直接合成为 QQ 语音，**不再重复发一条相同的文字**；合成失败或内容不适合朗读时自动退回文字。语音总开关 `voice.enabled` 关闭**或** `voice.apiKey` 为空时，语音功能完全关闭——不注册工具、不合成、不发语音，也不消耗任何额度。想暂停语音时直接关开关即可，Key 会保留。
 
 ```yaml
 - id: im-qqbot
   config:
     voice:
-      apiKey: ''                        # 留空 = 关闭语音；填入百炼 API Key 后生效
+      enabled: true                     # 语音总开关；关闭后即使有 Key 也不启用
+      apiKey: ''                        # 留空 = 无法启用语音；填入百炼 API Key 后生效
       model: qwen-audio-3.0-tts-flash   # 语音合成模型（也可用 cosyvoice-v2 等）
       voice: longanfengyue              # 默认音色
       instruction: 场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑，语速偏慢；第2句：吞吐、句尾落地   # 情感/语气指令（自然语言，可选）
@@ -218,7 +219,8 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 
 | 配置 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `voice.apiKey` | string | `''` | DashScope API Key；**留空 = 关闭语音**（面板保存时留空表示保持已保存的 Key，需点「清除已保存的 Key」才真正关闭） |
+| `voice.enabled` | boolean | `true` | 语音总开关；关闭后即使已保存 API Key 也不注册工具、不合成、不发语音（默认开启，兼容旧配置） |
+| `voice.apiKey` | string | `''` | DashScope API Key；**留空 = 无法启用语音**（面板保存时留空表示保持已保存的 Key；要停用语音请用 `enabled` 开关，不需要清除 Key） |
 | `voice.model` | string | `qwen-audio-3.0-tts-flash` | 语音合成模型 id，需在百炼控制台开通对应模型 |
 | `voice.voice` | string | `longanfengyue` | 默认音色 id；人格可用 `expressions.voice.voice` 覆盖 |
 | `voice.instruction` | string | `''` | 情感/语气指令（自然语言，≤400 字）：可写成「场景 + 逐句走向」，见下文；人格可用 `expressions.voice.instruction` 覆盖 |
@@ -233,7 +235,7 @@ npx @deepseek-ai/dsh web --patch /path/to/dsh-qqbot/cordis.dev.yml
 - **按人格音色**：`personas[].expressions.voice` 可覆盖全局音色、语速/音量与情感指令，切换人格后下一条语音即生效；模型还可在单轮调用里写「场景 + 逐句走向」（如「场景：夜里她叫住学长，楼道很静；第1句：声音很轻、带一点迟疑…」），仅本轮生效。语音提示词要求模型**每次调用都写场景与逐句走向**，避免所有语音都是同一种默认腔调。
 - **自动清洗**：代码块、URL、Markdown 符号、`|||` 分隔符与颜文字不会念出来；`|||` 与换行都按句号断句，句末自动补标点，朗读才有正常换气和收尾。
 - **运行时要求**：使用 Node 22+ 内置 WebSocket；Node 20 环境即使填了 Key 也会在启动日志里告警并关闭语音。
-- 设置面板「语音回复」页签可编辑以上字段；已保存的 API Key **永不回显**，只显示「已保存」状态。
+- 设置面板「语音回复」页签可编辑以上字段；顶部「启用语音回复」开关可随时暂停/恢复语音（Key 保留），已保存的 API Key **永不回显**，只显示「已保存」状态。
 
 #### 内置音色预设（按模型兼容标注）
 

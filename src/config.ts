@@ -122,7 +122,7 @@ export interface PersonaVoiceConfig {
  */
 export interface ExpressionsConfig {
   kaomoji?: KaomojiConfig;
-  /** 该人格的语音音色覆盖（语音功能本身由全局 `voice.apiKey` 控制） */
+  /** 该人格的语音音色覆盖（语音功能本身由全局 `voice.enabled` + `voice.apiKey` 控制） */
   voice?: PersonaVoiceConfig;
 }
 
@@ -159,11 +159,15 @@ export interface VoicePresetEntry {
 /**
  * 出站语音（TTS）配置。
  *
- * **门控语义：`apiKey` 为空时语音功能完全关闭**——不注册 qqbot_voice 工具、
- * 不合成、不发语音，行为与没有这项配置时一致（不消耗额度）。
+ * **门控语义：`enabled` 为 false 或 `apiKey` 为空时语音功能完全关闭**——
+ * 不注册 qqbot_voice 工具、不合成、不发语音，行为与没有这项配置时一致
+ * （不消耗额度）。`enabled` 默认 true：已有 Key 的配置升级后行为不变，
+ * 想停用语音时关开关即可，不需要清除 Key。
  */
 export interface VoiceConfig {
-  /** DashScope API Key（留空 = 关闭语音） */
+  /** 语音总开关（关闭后即使已保存 Key 也不启用；默认 true） */
+  enabled: boolean;
+  /** DashScope API Key（留空同样无法启用语音） */
   apiKey: string;
   /** 语音模型 id */
   model: string;
@@ -257,7 +261,7 @@ export interface ImQQBotConfig {
   vision: VisionConfig;
   /** 附件发送（qqbot_send_file 工具与交付物投递共用） */
   sendFile: SendFileConfig;
-  /** 出站语音（TTS）；apiKey 为空时整体关闭 */
+  /** 出站语音（TTS）；开关关闭或 apiKey 为空时整体关闭 */
   voice: VoiceConfig;
 }
 
@@ -318,8 +322,10 @@ export const ExpressionsSchema: Schema<ExpressionsConfig> = Schema.object({
 
 /** 语音合成子 Schema（独立导出：config 路由的服务端校验复用） */
 export const VoiceConfigSchema: Schema<VoiceConfig> = Schema.object({
+  enabled: Schema.boolean().default(true)
+    .description('语音总开关；关闭后即使已保存 Key 也不合成、不发语音（默认 true）'),
   apiKey: Schema.string().default('')
-    .description('DashScope API Key；留空则不启用语音（不合成、不发语音）'),
+    .description('DashScope API Key；留空则不启用语音（开关打开也需要 Key 才生效）'),
   model: Schema.string().default(DEFAULT_VOICE_MODEL)
     .description('语音模型 id（如 qwen-audio-3.0-tts-flash / cosyvoice-v2）'),
   voice: Schema.string().default(DEFAULT_VOICE_ID)
@@ -430,6 +436,7 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
     maxFiles: 4,
   }).description('附件发送配置'),
   voice: VoiceConfigSchema.default({
+    enabled: true,
     apiKey: '',
     model: DEFAULT_VOICE_MODEL,
     voice: DEFAULT_VOICE_ID,
@@ -439,5 +446,5 @@ export const ConfigSchema: Schema<ImQQBotConfig> = Schema.object({
     workspace: '',
     maxChars: DEFAULT_VOICE_MAX_CHARS,
     timeoutMs: DEFAULT_VOICE_TIMEOUT_MS,
-  }).description('出站语音（TTS）配置；apiKey 为空时语音功能关闭'),
+  }).description('出站语音（TTS）配置；开关关闭或 apiKey 为空时语音功能关闭'),
 });

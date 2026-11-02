@@ -1,7 +1,7 @@
 /**
  * 语音回复发送器 — 合成 → 临时文件 → QQ 语音消息
  *
- * 只在 `voice.apiKey` 非空时创建（见 createVoiceSpeaker）。是否发语音由上层模型
+ * 只在开关打开且 `voice.apiKey` 非空时创建（见 createVoiceSpeaker）。是否发语音由上层模型
  * 决定（调用 qqbot_voice），本模块只在轮末把已扣下的正文合成成语音；任何失败都
  * 返回 false，由出站路由退回文字，避免用户什么都收不到。
  */
@@ -32,7 +32,7 @@ export interface VoiceSenderLike {
 
 export interface VoiceSpeakerOptions {
   manager: SessionManager;
-  /** 全局语音配置（apiKey 为空时不创建 speaker） */
+  /** 全局语音配置（开关关闭或 apiKey 为空时不创建 speaker） */
   voice: VoiceConfig;
   sender: VoiceSenderLike;
   logger: Logger;
@@ -44,7 +44,7 @@ function temporaryAudioPath(): string {
 }
 
 /**
- * 创建语音发送器；未配置 API Key 或运行时缺少内置 WebSocket 时返回 undefined。
+ * 创建语音发送器；开关关闭、未配置 API Key 或运行时缺少内置 WebSocket 时返回 undefined。
  *
  * Node 20 没有全局 WebSocket：此时即使填了 Key 也无法合成，启动时告警并关闭，
  * 而不是每轮对话都抛错。

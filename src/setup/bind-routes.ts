@@ -645,7 +645,7 @@ function voicePresetsSchema(value: unknown, fallback: VoicePresetEntry[]): Voice
  * 语音配置校验（合并写回，Key 支持遮罩语义）：
  *
  * - GET 不回显 Key，客户端提交空字符串 = 保持已保存的 Key
- * - `clearApiKey: true` = 显式清空 → 语音功能关闭
+ * - `clearApiKey: true` = 显式清空已保存的 Key（Key 管理；要停用语音请关 `enabled`）
  * - `hasApiKey` 是 GET 附带的只读提示，提交时忽略
  */
 function voiceSchema(value: unknown, current: VoiceConfig | undefined): VoiceConfig {
@@ -653,6 +653,10 @@ function voiceSchema(value: unknown, current: VoiceConfig | undefined): VoiceCon
     throw new TypeError('voice 必须是对象');
   }
   const record = value as Record<string, unknown>;
+
+  const enabled = record.enabled === undefined || record.enabled === null
+    ? current?.enabled !== false
+    : booleanSchema(record.enabled, 'voice.enabled');
 
   let apiKey = current?.apiKey?.trim() ?? '';
   if (record.clearApiKey !== undefined && record.clearApiKey !== null) {
@@ -673,6 +677,7 @@ function voiceSchema(value: unknown, current: VoiceConfig | undefined): VoiceCon
   }
 
   return {
+    enabled,
     apiKey,
     model: voiceTextField(record.model, 'voice.model', current?.model?.trim() || DEFAULT_VOICE_MODEL),
     voice: voiceTextField(record.voice, 'voice.voice', current?.voice?.trim() || DEFAULT_VOICE_ID),

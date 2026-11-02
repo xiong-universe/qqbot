@@ -47,7 +47,7 @@ function describeTimbre(tuning: VoiceTuning, options?: readonly VoiceOption[]): 
 /**
  * 组装语音说明 section。
  *
- * @returns undefined = 语音未启用（apiKey 为空），不注入任何说明
+ * @returns undefined = 语音未启用（开关关闭或 apiKey 为空），不注入任何说明
  */
 export function buildVoicePromptSection(options: VoicePromptOptions): VoicePromptSection | undefined {
   const { settings, personaVoice, voiceOptions } = options;
@@ -63,7 +63,7 @@ export function buildVoicePromptSection(options: VoicePromptOptions): VoicePromp
     `（${VOICE_TOOL_NAME} 已在本会话的工具列表里；即使人格的工具清单没写到它，也照样可以调用。）`,
     '',
     '【instruction = 场景 + 逐句走向】',
-    `每次调用 ${VOICE_TOOL_NAME} 都要带 instruction（≤${MAX_VOICE_INSTRUCTION_LEN} 字，只描述怎么说，不会被念出来）：`
+    `每次调用 ${VOICE_TOOL_NAME} 都必须带 instruction（必填，≤${MAX_VOICE_INSTRUCTION_LEN} 字，只描述怎么说，不会被念出来）：`
     + '先交代这一轮的场景/情境，再按正文的句子顺序写每一句怎么走，用「；」分隔。',
     '模板：场景：夜里她叫住学长，楼道很静，她有点紧张；第1句：声音很轻、带一点迟疑，语速偏慢，像在鼓起勇气；'
     + '第2句：有些吞吐，中间有自然的停顿，句尾不要往上飘；第3句：柔和、带一点温暖的笑意，语速平稳。',

@@ -4,7 +4,7 @@
  * 取代早期的字符匹配触发词：关键词命中既容易误判（聊天里出现「唱歌」就被朗读），
  * 也识别不了「想听你的声音」这类变体。模型判断更准，还能结合上下文选时机。
  *
- * 工具本身只给会话打标记（`record.voiceRequested` + 可选的单轮情感指令），
+ * 工具本身只给会话打标记（`record.voiceRequested` + 必填的单轮情感指令），
  * 真正的合成与发送在轮末由 VoiceSpeaker 完成；本轮回复正文只用于合成，
  * 不再作为文字消息发送（见 transport/outbound.ts），因此不会「发一遍文字又发一遍语音」。
  */
@@ -63,7 +63,7 @@ const DESCRIPTION =
   + 'The reply text you write afterwards is synthesized into speech and is NOT also sent as text, '
   + 'so write it as a line to say out loud: short, colloquial, no stage directions in brackets or asterisks, '
   + 'no "|||" bubbles, no line breaks, no code, links, lists or Markdown. '
-  + 'Always pass the optional `instruction` argument for THIS turn: describe the scene plus how each sentence '
+  + 'The `instruction` argument is REQUIRED on every call: describe the scene plus how each sentence '
   + 'should be delivered, separated by "；", within '
   + `${MAX_VOICE_INSTRUCTION_LEN} characters — e.g. "场景：夜里她叫住学长，楼道很静，她有点紧张；`
   + '第1句：声音很轻、带一点迟疑，语速偏慢；第2句：吞吐、有自然停顿，句尾不要往上飘". '
@@ -114,7 +114,10 @@ export function buildVoiceToolMessage(
     '建议在 instruction 里写「场景 + 逐句走向」：'
     + `如「场景：夜里她叫住学长，楼道很静；第1句：声音很轻、迟疑、语速偏慢；第2句：吞吐、句尾落地」（≤${MAX_VOICE_INSTRUCTION_LEN} 字）。`
     + '不写会沿用默认语气，每一句都用同一种默认语气，听起来容易像念稿。',
-    ...(result.instruction === '' ? [] : [`本轮语气：${result.instruction}`]),
+    ...(result.instruction === ''
+      ? ['本轮没有收到 instruction。如果还没开始写正文，请立刻重新调用 '
+        + `${VOICE_TOOL_NAME} 并带上「场景 + 逐句走向」；否则这一条只能按默认语气合成，很容易像念稿。`]
+      : [`本轮语气：${result.instruction}`]),
   ].join('\n');
 }
 
@@ -142,12 +145,13 @@ export function registerVoiceTool(ctx: Context, options: VoiceToolOptions): bool
         instruction: {
           type: 'string',
           description:
-            'Scene + per-sentence delivery for THIS reply only (≤'
+            'Required. Scene + per-sentence delivery for THIS reply only (≤'
             + `${MAX_VOICE_INSTRUCTION_LEN} chars), separated by "；": `
             + '"场景：夜里她叫住学长，楼道很静；第1句：声音很轻、迟疑、语速偏慢；第2句：吞吐、句尾落地". '
             + 'Overrides the persona/global emotion instruction once; never spoken aloud.',
         },
       },
+      required: ['instruction'],
       additionalProperties: false,
     },
     output: {
